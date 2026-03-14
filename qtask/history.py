@@ -64,6 +64,7 @@ class TaskHistoryStore:
             "updated_at": now,
             "duration_s": round(duration_s, 3),
         })
+        self._ensure_indexed(task_id, now)
 
     def record_fail(self, task_id: str, reason: str = ""):
         """任务移入 DLQ 时调用"""
@@ -74,6 +75,7 @@ class TaskHistoryStore:
             "updated_at":  now,
             "fail_reason": reason[:500],
         })
+        self._ensure_indexed(task_id, now)
 
     def record_retry(self, task_id: str):
         """每次重试时调用，重试次数 +1"""
@@ -188,6 +190,21 @@ class TaskHistoryStore:
             keep_days = self.get_keep_days()
             # 比 keep_days 多一天的 buffer
             self.r.expire(key, (keep_days + 1) * 86400)
+        except Exception:
+            pass
+
+    def _ensure_indexed(self, task_id: str, ts: float):
+        """
+        确保 task_id 在 SortedSet 索引中存在。
+        解决场景：
+          - 生产者和消费者使用不同 SmartQueue 实例（不同 namespace 配置）
+          - 索引被手动清除后，Worker 继续消费并 ack
+          - record_push 调用在生产者侧，record_ack 在消费者侧
+        用 NX 语义（只在不存在时设置）避免覆盖 record_push 写入的更精确时间
+        """
+        try:
+            # zadd NX: only add if member doesn't already exist
+            self.r.zadd(self._idx_key, {task_id: ts}, nx=True)
         except Exception:
             pass
 
