@@ -3,7 +3,7 @@ from qtask import Worker
 worker = Worker(
     listen_url="redis://localhost:6379/0",
     listen_q_name="db:tasks",
-    storage_url="http://192.168.1.100:8000",
+    storage_url="http://127.0.0.1:8000",
     worker_group="db_group"
 )
 

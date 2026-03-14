@@ -5,7 +5,7 @@ worker = Worker(
     listen_q_name="spider:tasks",
     result_url="redis://localhost:6379/0",
     result_q_name="db:tasks",
-    storage_url="http://192.168.1.100:8000",  # 必须配置，否则无法卸载大对象
+    storage_url="http://127.0.0.1:8000",  # 必须配置，否则无法卸载大对象
     worker_group="spider_group"
 )
 
