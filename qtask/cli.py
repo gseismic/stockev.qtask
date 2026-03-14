@@ -87,20 +87,29 @@ def cmd_dlq(
 @app.command("requeue")
 def cmd_requeue(
     queue_name: str = typer.Argument(..., help="The base name of the underlying queue (e.g., spider:tasks)"),
+    task_id: str = typer.Option(None, "--task-id", help="Requeue a specific task ID instead of all tasks"),
     redis_url: str = typer.Option("redis://localhost:6379/0", help="Redis connection URL")
 ):
-    """Re-queue all messages from DLQ back into the main queue"""
+    """Re-queue messages from DLQ back into the main queue"""
     r = get_redis_client(redis_url)
     q_name = f"{queue_name}:stream"
     dlq_name = f"{queue_name}:stream_dlq"
     
     try:
-        msgs = r.xrange(dlq_name, min="-", max="+")
-        if not msgs:
-            typer.echo(f"✅ DLQ {dlq_name} is empty. Nothing to requeue.")
-            return
-            
-        typer.echo(f"🔄 Re-queuing {len(msgs)} messages from {dlq_name} to {q_name}...")
+        if task_id:
+            # Requeue specific task
+            msgs = r.xrange(dlq_name, min=task_id, max=task_id)
+            if not msgs:
+                typer.echo(f"⚠️ Task ID {task_id} not found in DLQ.")
+                return
+            typer.echo(f"🔄 Re-queuing task {task_id} from {dlq_name} to {q_name}...")
+        else:
+            # Requeue all tasks
+            msgs = r.xrange(dlq_name, min="-", max="+")
+            if not msgs:
+                typer.echo(f"✅ DLQ {dlq_name} is empty. Nothing to requeue.")
+                return
+            typer.echo(f"🔄 Re-queuing all {len(msgs)} messages from {dlq_name} to {q_name}...")
         
         # 使用 Pipeline 批量提交，保证效率
         pipe = r.pipeline()

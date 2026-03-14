@@ -35,7 +35,7 @@ STORAGE_DIR = "/tmp/qtask_storage"
 os.makedirs(STORAGE_DIR, exist_ok=True)
 
 @app.post("/upload/{file_id}")
-async def upload_file(file_id: str = Form(...), file: UploadFile = File(...)):
+async def upload_file(file_id: str, file: UploadFile = File(...)):
     """接收 Worker 上传的大体积数据并返回唯一 Key"""
     # 基础的安全防御：防止目录穿越攻击 (Directory Traversal)
     if ".." in file_id or "/" in file_id:
