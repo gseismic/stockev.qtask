@@ -1,4 +1,5 @@
 import uuid
+import socket
 import traceback
 import time
 import redis as redis_lib
@@ -33,7 +34,9 @@ class Worker:
         enable_history: bool = True,
         namespace: str = None,             # 项目/任务级命名空间
     ):
-        self.worker_id = worker_id or uuid.uuid4().hex[:8]
+        # worker_id 含主机名，方便多主机环境识别是哪台机器在处理任务
+        _hostname = socket.gethostname().split('.')[0][:12]  # 取短主机名（去掉域名部分）
+        self.worker_id = worker_id or f"{_hostname}-{uuid.uuid4().hex[:6]}"
         self.namespace = namespace or ""
         # worker_group: 若未显式指定，交给 SmartQueue 按 namespace 自动推导
         self.worker_group = worker_group
