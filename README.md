@@ -113,7 +113,6 @@ queue = SmartQueue(
     redis_url="redis://localhost:6379/0",
     queue_name="spider:tasks",
     namespace="my_project",           # 推荐：加入项目级命名空间
-    worker_group="spider_group",
     storage=storage,                  # 可选，大载荷卸载
     large_threshold_bytes=1024 * 50,  # 默认 50KB
 )
@@ -146,7 +145,6 @@ worker = Worker(
     listen_q_name="spider:tasks",
     namespace="my_project",                # 必须与生产者一致！
     storage_url="http://localhost:8000",   # 对应 FastAPI 存储服务
-    worker_group="spider_group",           # 不指定默认按 namespace 自动生成
     worker_id="worker-01",                 # 不指定则自动生成带 hostname 的 ID
     auto_claim=True,                       # 自动认领 Zombie 任务
     claim_interval=300,                    # 认领检查间隔（秒）
@@ -183,7 +181,6 @@ worker = Worker(
     result_q_name="db:tasks",               # 结果队列名
     namespace="my_project",
     storage_url="http://localhost:8000",
-    worker_group="spider_group",
 )
 
 @worker.on("scrape_stock")
@@ -201,7 +198,6 @@ worker2 = Worker(
     listen_q_name="db:tasks",
     namespace="my_project",
     storage_url="http://localhost:8000",
-    worker_group="db_group",
 )
 
 @worker2.on("save_stock")
