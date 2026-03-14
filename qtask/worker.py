@@ -1,5 +1,7 @@
 import uuid
 import traceback
+import time
+from loguru import logger
 from typing import Callable, Optional
 from .queue import SmartQueue
 from .storage import RemoteStorage
@@ -42,33 +44,42 @@ class Worker:
         return decorator
 
     def run(self):
-        print(f"[*] Worker [{self.worker_id}] in Group [{self.worker_group}] Started. Listening: {self.listen_q.queue_name}")
+        logger.info(f"Worker [{self.worker_id}] in Group [{self.worker_group}] Started.")
+        logger.info(f"Listening on Queue: {self.listen_q.queue_name}")
         while True:
             try:
                 payload, msg_context = self.listen_q.pop_blocking()
                 if not payload:
                     continue
                     
-                action = payload.get("action")
+                action = payload.get("action", "unknown_action")
+                msg_id = msg_context.get("msg_id") if msg_context else "unknown_id"
+                
+                logger.info(f"[{msg_id}] Received Task -> Action: {action}")
                 handler = self.handlers.get(action)
                 
                 if not handler:
-                    print(f"[!] Unknown action: {action}")
+                    logger.warning(f"[{msg_id}] Unknown action: {action}. Failing task.")
                     if msg_context:
                         self.listen_q.fail(msg_context)
                     continue
 
                 # 执行业务逻辑
+                t_start = time.time()
                 result_payload = handler(payload)
+                t_cost = time.time() - t_start
                 
                 # 如果有返回值且配置了结果队列，自动推送（超大载荷在此处会被拦截）
                 if result_payload and self.result_q:
                     self.result_q.push(result_payload)
+                    logger.info(f"[{msg_id}] Task completed in {t_cost:.3f}s. Result pushed to {self.result_q.queue_name}.")
+                else:
+                    logger.info(f"[{msg_id}] Task completed in {t_cost:.3f}s. (No return payload)")
                     
                 # 成功后 ACK
                 self.listen_q.ack(msg_context)
                 
             except Exception as e:
-                print(f"[-] Task Failed: {e}\n{traceback.format_exc()}")
+                logger.error(f"Task Failed: {e}\n{traceback.format_exc()}")
                 if msg_context:
                     self.listen_q.fail(msg_context)

@@ -1,5 +1,6 @@
 import json
 import redis
+from loguru import logger
 from typing import Tuple, Dict, Any, Optional
 from .storage import RemoteStorage
 
@@ -37,9 +38,11 @@ class SmartQueue:
     def push(self, payload: Dict[str, Any]):
         """入队：自动评估体积，拦截大对象，推入 Stream"""
         data_bytes = json.dumps(payload, ensure_ascii=False).encode('utf-8')
+        data_len = len(data_bytes)
         
-        if self.storage and len(data_bytes) > self.large_threshold_bytes:
+        if self.storage and data_len > self.large_threshold_bytes:
             storage_key = self.storage.save_bytes(data_bytes)
+            logger.info(f"Intercepted large payload ({data_len / 1024:.2f} KB). Offloaded to storage with key: {storage_key}.")
             msg = json.dumps({"_qtask_large_payload": True, "storage_key": storage_key})
         else:
             msg = data_bytes.decode('utf-8')
@@ -98,11 +101,14 @@ class SmartQueue:
             parsed = json.loads(raw_payload)
             if isinstance(parsed, dict) and parsed.get("_qtask_large_payload"):
                 if not self.storage:
+                    logger.error("Detected large payload but RemoteStorage is not assigned.")
                     raise ValueError("检测到大对象，但未配置 Storage")
                 real_data_str = self.storage.load(parsed["storage_key"])
+                logger.info(f"[{msg_id}] Loaded large payload from remote storage successfully.")
                 return json.loads(real_data_str), msg_context
             return parsed, msg_context
         except Exception as e:
+            logger.error(f"Failed to process raw message {msg_id}: {e}")
             self._move_to_dlq(msg_context)
             return None, None
 
