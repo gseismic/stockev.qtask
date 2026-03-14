@@ -306,9 +306,15 @@ def update_settings(req: SettingsRequest):
 
 # ============ Task List / Stats API ============
 
+
 @app.get("/api/tasks/{queue_name}", dependencies=[Depends(get_current_username)])
 def get_task_details(queue_name: str, status: str = "all", limit: int = 50):
-    """获取队列任务明细（优先 Stream，failed 时从 DLQ 读取）"""
+    """
+    获取队列任务明细。
+    status=failed  → 从 DLQ 读死信消息
+    status=all     → 返回真正未 ACK 的 PEL 消息（各 consumer group 的 pending entry list）
+                     注意：ACK 后的已完成消息不会出现在这里，请用 /api/history 查看历史
+    """
     r = get_redis_client()
     base_name = queue_name.replace(":stream", "")
     q_name = f"{base_name}:stream"
@@ -316,6 +322,7 @@ def get_task_details(queue_name: str, status: str = "all", limit: int = 50):
     res_tasks = []
     try:
         if status == "failed":
+            # DLQ：XREVRANGE 死信队列
             msgs = r.xrevrange(dlq_name, max="+", min="-", count=limit)
             for msg_id, payload in msgs:
                 try:
@@ -327,19 +334,46 @@ def get_task_details(queue_name: str, status: str = "all", limit: int = 50):
                     "status": "failed", "action": data.get("action", "unknown"), "payload": data,
                 })
         else:
-            msgs = r.xrevrange(q_name, max="+", min="-", count=limit)
-            for msg_id, payload in msgs:
+            # Unacked (PEL)：只取各 consumer group 中真正未 ACK 的消息
+            # 比 XRANGE 准确：ACK 后的消息不会出现在这里
+            pel_ids: set = set()
+            try:
+                groups = r.xinfo_groups(q_name)
+            except Exception:
+                groups = []
+            for g in groups:
+                g_name = g.get("name")
+                if not g_name:
+                    continue
                 try:
-                    data = json.loads(payload.get("payload", "{}"))
+                    # XPENDING summary: get up to limit pending entries for this group
+                    pending = r.xpending_range(q_name, g_name, min="-", max="+", count=limit)
+                    for entry in pending:
+                        pel_ids.add(entry.get("message_id") or entry.get("id"))
                 except Exception:
-                    data = {"raw": payload.get("payload", "")}
-                res_tasks.append({
-                    "id": msg_id, "status": "queued",
-                    "action": data.get("action", "unknown"), "payload": data,
-                })
+                    pass
+            if pel_ids:
+                # Batch fetch message bodies
+                ids = sorted(pel_ids)[:limit]
+                for msg_id in ids:
+                    try:
+                        msgs = r.xrange(q_name, min=msg_id, max=msg_id)
+                        if msgs:
+                            _, payload = msgs[0]
+                            try:
+                                data = json.loads(payload.get("payload", "{}"))
+                            except Exception:
+                                data = {"raw": str(payload.get("payload", ""))[:200]}
+                            res_tasks.append({
+                                "id": msg_id, "status": "unacked",
+                                "action": data.get("action", "unknown"), "payload": data,
+                            })
+                    except Exception:
+                        pass
     except Exception:
         pass
-    return {"tasks": res_tasks}
+    return {"tasks": res_tasks, "total": len(res_tasks)}
+
 
 
 @app.get("/api/stats", dependencies=[Depends(get_current_username)])
@@ -377,7 +411,8 @@ def get_system_stats():
             dlq_k = f"{k.replace(':stream', '')}:stream_dlq"
             ns = _detect_namespace(k, known_namespaces)
             q_info = {
-                "length": r.xlen(k),
+                "length": r.xlen(k),       # stream 历史总消息数（含已完成）
+                "pending_ack": 0,           # 真正未 ACK 的 PEL 消息数
                 "dlq_length": 0,
                 "groups": [],
                 "history_counts": {},
@@ -389,10 +424,12 @@ def get_system_stats():
                 pass
             try:
                 for g in r.xinfo_groups(k):
+                    g_pending = g.get("pending", 0) or 0
+                    q_info["pending_ack"] += g_pending
                     q_info["groups"].append({
                         "name": g.get("name"),
                         "consumers": g.get("consumers"),
-                        "pending": g.get("pending"),
+                        "pending": g_pending,
                     })
             except Exception:
                 pass
@@ -402,6 +439,7 @@ def get_system_stats():
             except Exception:
                 pass
             queues[k] = q_info
+
     except Exception as e:
         queues = {"error": str(e)}
 

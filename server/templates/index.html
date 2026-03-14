@@ -333,15 +333,15 @@
                                     queueSubTab==='recent'?'bg-slate-800 text-white':'bg-slate-100 text-slate-600 hover:bg-slate-200']">
                                 <i data-lucide="clock" class="w-4 h-4"></i> Recent
                             </button>
-                            <!-- Pending: 读 Stream 原始消息（只有等待处理的才在这里） -->
+                            <!-- Unacked: 只显示真正未 ACK 的 PEL 消息 -->
                             <button @click="queueSubTab='pending'; fetchTasks()"
                                 :class="['px-4 py-2 rounded-lg text-sm font-medium transition flex items-center gap-1.5',
                                     queueSubTab==='pending'?'bg-amber-600 text-white':'bg-slate-100 text-slate-600 hover:bg-amber-50']">
-                                <i data-lucide="hourglass" class="w-4 h-4"></i> Pending
-                                <span v-if="stats.queues[activeQueue]?.length>0"
+                                <i data-lucide="hourglass" class="w-4 h-4"></i> Unacked
+                                <span v-if="stats.queues[activeQueue]?.pending_ack>0"
                                     class="text-xs px-1.5 py-0.5 rounded-full"
                                     :class="queueSubTab==='pending'?'bg-white/20':'bg-amber-100 text-amber-700'">
-                                    {{ stats.queues[activeQueue].length }}
+                                    {{ stats.queues[activeQueue].pending_ack }}
                                 </span>
                             </button>
                             <!-- DLQ -->
@@ -452,7 +452,7 @@
                                     <th class="px-6 py-3 text-left text-xs font-semibold text-slate-500 uppercase">Stream ID</th>
                                     <th class="px-6 py-3 text-left text-xs font-semibold text-slate-500 uppercase">Action</th>
                                     <th class="px-6 py-3 text-left text-xs font-semibold text-slate-500 uppercase">
-                                        <span v-if="queueSubTab==='pending'" class="text-amber-600">Waiting to process</span>
+                                        <span v-if="queueSubTab==='pending'" class="text-amber-600">Unacked (PEL) — truly pending ACK</span>
                                         <span v-else class="text-red-600">Failed — not retried</span>
                                     </th>
                                     <th class="px-6 py-3 text-left text-xs font-semibold text-slate-500 uppercase">Payload Preview</th>
@@ -463,7 +463,7 @@
                                 <tr v-if="loading.tasks"><td colspan="5" class="px-6 py-10 text-center text-slate-400"><i data-lucide="loader-2" class="w-7 h-7 animate-spin mx-auto text-indigo-400"></i></td></tr>
                                 <tr v-else-if="tasks.length===0"><td colspan="5" class="px-6 py-10 text-center text-slate-400">
                                     <i data-lucide="check-circle-2" class="w-9 h-9 mx-auto mb-2 text-emerald-300"></i>
-                                    <span v-if="queueSubTab==='pending'">Queue empty — all tasks have been processed</span>
+                                    <span v-if="queueSubTab==='pending'">No unacked messages — all tasks have been ACK'd ✅</span>
                                     <span v-else>No dead letters 🎉</span>
                                 </td></tr>
                                 <tr v-for="t in tasks" :key="t.id" class="hover:bg-slate-50">
@@ -472,7 +472,7 @@
                                     <td class="px-6 py-4">
                                         <span :class="['px-2 py-0.5 text-xs font-bold rounded-full',
                                             queueSubTab==='dlq'?'bg-red-100 text-red-800':'bg-amber-100 text-amber-800']">
-                                            {{ queueSubTab==='dlq'?'DEAD LETTER':'PENDING' }}
+                                            {{ queueSubTab==='dlq'?'DEAD LETTER':'UNACKED' }}
                                         </span>
                                     </td>
                                     <td class="px-6 py-4 text-slate-500 font-mono text-xs max-w-xs truncate">{{ JSON.stringify(t.payload).substring(0,60) }}...</td>
