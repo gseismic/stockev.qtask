@@ -139,16 +139,24 @@ def cmd_clear(
     queue_name: str = typer.Argument(..., help="队列基础名称"),
     redis_url: str = typer.Option("redis://localhost:6379/0", "--redis-url", help="Redis 连接 URL"),
     force: bool = typer.Option(False, "--force", "-f", help="跳过确认"),
+    hard: bool = typer.Option(False, "--hard", help="同时清除历史记录（Hash + SortedSet），不留任何残留"),
 ):
-    """危险：清空队列及其 DLQ 的所有数据"""
+    """
+    清空队列 Stream + DLQ。
+    --hard 模式下额外清除该队列的所有历史记录（彻底重置）。
+    """
+    mode_desc = "Stream + DLQ + History（彻底重置）" if hard else "Stream + DLQ"
     if not force:
-        typer.confirm(f"DANGER: Permanently delete ALL data in queue '{queue_name}'?", abort=True)
+        typer.confirm(f"DANGER: Clear [{mode_desc}] for queue '{queue_name}'?", abort=True)
     from qtask.queue import SmartQueue
     q = SmartQueue(redis_url, queue_name)
-    if q.clear_all():
-        typer.echo(f"💣 Queue {queue_name} has been completely wiped.")
+    if q.clear_all(clear_history=hard):
+        extra = " (history also wiped)" if hard else ""
+        typer.echo(f"💣 Queue {queue_name} cleared{extra}.")
     else:
         typer.echo("❌ Failed.")
+
+
 
 
 # ──────────────────────── Namespace 子命令 ────────────────────────

@@ -198,15 +198,42 @@ class SmartQueue:
             logger.error(f"Reset group failed: {e}")
             return False
 
-    def clear_all(self):
+    def clear_all(self, clear_history: bool = False):
+        """
+        清空队列（Stream + DLQ）。
+        clear_history=True 时同时删除该队列的所有历史记录
+        （qtask:hist:{base}:* 和 qtask:hist_idx:{base}），不留任何残留。
+        """
         try:
             self.redis.xtrim(self.queue_name, maxlen=0)
             self.redis.xtrim(self.dlq, maxlen=0)
             self._ensure_consumer_group()
+            if clear_history:
+                self._purge_history_for_base(self._base_name)
             return True
         except Exception as e:
             logger.error(f"Clear queue failed: {e}")
             return False
+
+    def _purge_history_for_base(self, base_name: str):
+        """删除单个队列的所有历史 key（Hash + SortedSet）"""
+        try:
+            # 1. 删除 SortedSet（时间索引）
+            self.redis.delete(f"qtask:hist_idx:{base_name}")
+            # 2. 删除所有任务 Hash（scan 防止阻塞）
+            pattern = f"qtask:hist:{base_name}:*"
+            cursor = 0
+            keys = []
+            while True:
+                cursor, batch = self.redis.scan(cursor, match=pattern, count=200)
+                keys.extend(batch)
+                if cursor == 0:
+                    break
+            if keys:
+                self.redis.delete(*keys)
+            logger.debug(f"History purged for {base_name}: idx + {len(keys)} hash keys")
+        except Exception as e:
+            logger.warning(f"_purge_history_for_base failed (non-critical): {e}")
 
     def _process_raw_msg(self, msg_id: str, raw_payload: str) -> Tuple[Optional[Dict[str, Any]], Optional[Dict[str, str]]]:
         msg_context = {"msg_id": msg_id, "raw_payload": raw_payload, "_pop_ts": time.time()}
@@ -291,39 +318,37 @@ class SmartQueue:
     @staticmethod
     def purge_namespace(redis_client, namespace: str) -> Dict[str, int]:
         """
-        危险操作：清除 namespace 下所有数据
-        包括：所有 Stream、DLQ、历史 Hash、历史 SortedSet、注册元数据
-        返回被删除的 key 数量统计
+        危险操作：彻底清除 namespace 下的所有数据。
+        涵盖：Stream（含 DLQ）、历史记录 Hash、历史时间索引 SortedSet、注册元数据。
+        返回各类被删除 key 数量的统计字典。
         """
         deleted = {"stream_keys": 0, "history_keys": 0, "meta_keys": 0}
         try:
-            # 删除 {ns}:* 的 Stream 相关 key
-            pattern = f"{namespace}:*"
-            cursor = 0
-            stream_keys = []
-            while True:
-                cursor, keys = redis_client.scan(cursor, match=pattern, count=200)
-                stream_keys.extend(keys)
-                if cursor == 0:
-                    break
-            if stream_keys:
-                redis_client.delete(*stream_keys)
-                deleted["stream_keys"] = len(stream_keys)
+            def _scan_delete(pattern):
+                """扫描并批量删除匹配 pattern 的 key，返回删除数量"""
+                cursor = 0
+                total = 0
+                while True:
+                    cursor, keys = redis_client.scan(cursor, match=pattern, count=200)
+                    if keys:
+                        redis_client.delete(*keys)
+                        total += len(keys)
+                    if cursor == 0:
+                        break
+                return total
 
-            # 删除历史记录 key
-            hist_pattern = f"qtask:hist:{namespace}:*"
-            cursor = 0
-            hist_keys = []
-            while True:
-                cursor, keys = redis_client.scan(cursor, match=hist_pattern, count=200)
-                hist_keys.extend(keys)
-                if cursor == 0:
-                    break
-            if hist_keys:
-                redis_client.delete(*hist_keys)
-                deleted["history_keys"] = len(hist_keys)
+            # 1. Stream + DLQ key：{ns}:*
+            deleted["stream_keys"] = _scan_delete(f"{namespace}:*")
 
-            # 删除 namespace 元数据
+            # 2. 历史 Hash：qtask:hist:{ns}:*  (包含每条任务的 Hash)
+            n_hist = _scan_delete(f"qtask:hist:{namespace}:*")
+
+            # 3. 历史时间索引 SortedSet：qtask:hist_idx:{ns}:*  ← 关键补漏
+            n_idx = _scan_delete(f"qtask:hist_idx:{namespace}:*")
+
+            deleted["history_keys"] = n_hist + n_idx
+
+            # 4. namespace 注册元数据
             redis_client.delete(_NS_QUEUES_KEY.format(ns=namespace))
             redis_client.srem(_NS_SET_KEY, namespace)
             deleted["meta_keys"] = 1
