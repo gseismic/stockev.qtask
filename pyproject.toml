@@ -24,7 +24,9 @@ server = [
     "fastapi",
     "uvicorn",
     "aiofiles",
-    "python-multipart"
+    "python-multipart",
+    "psutil",
+    "jinja2"
 ]
 test = [
     "pytest",
