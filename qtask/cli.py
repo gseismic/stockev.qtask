@@ -2,6 +2,7 @@ import typer
 import redis
 from loguru import logger
 import sys
+from typing import Optional
 
 app = typer.Typer(help="qtask CLI: Inspect Redis Stream Queues.")
 
@@ -97,29 +98,23 @@ def cmd_requeue(
     
     try:
         if task_id:
-            # Requeue specific task
             msgs = r.xrange(dlq_name, min=task_id, max=task_id)
             if not msgs:
                 typer.echo(f"⚠️ Task ID {task_id} not found in DLQ.")
                 return
             typer.echo(f"🔄 Re-queuing task {task_id} from {dlq_name} to {q_name}...")
         else:
-            # Requeue all tasks
             msgs = r.xrange(dlq_name, min="-", max="+")
             if not msgs:
                 typer.echo(f"✅ DLQ {dlq_name} is empty. Nothing to requeue.")
                 return
             typer.echo(f"🔄 Re-queuing all {len(msgs)} messages from {dlq_name} to {q_name}...")
         
-        # 使用 Pipeline 批量提交，保证效率
         pipe = r.pipeline()
         for msg_id, payload in msgs:
-            # 取出原始 payload
             orig_payload = payload.get("payload")
             if orig_payload:
-                # 重新作为全新任务放回主队列
                 pipe.xadd(q_name, {"payload": orig_payload})
-                # 从死信队列删除
                 pipe.xdel(dlq_name, msg_id)
         
         pipe.execute()
@@ -176,6 +171,107 @@ def cmd_clear(
         typer.echo(f"💣 Stream {queue_name} has been completely wiped and recreated.")
     else:
         typer.echo("❌ Failed to clear queue.")
+
+
+# ──────────────────────── 新增：历史查询命令 ────────────────────────
+
+@app.command("history")
+def cmd_history(
+    queue_name: str = typer.Argument(..., help="队列基础名称（如 spider:tasks）"),
+    status: str = typer.Option("all", "--status", "-s", help="筛选状态: all | pending | completed | failed"),
+    days: int = typer.Option(None, "--days", "-d", help="最近 N 天（不指定则使用全局 keep_days 设置）"),
+    limit: int = typer.Option(50, "--limit", "-n", help="最多显示条数"),
+    redis_url: str = typer.Option("redis://localhost:6379/0", "--redis-url", help="Redis 连接 URL"),
+):
+    """查看任务历史（已完成/失败/待处理/重试次数）"""
+    r = get_redis_client(redis_url)
+    base_name = queue_name.replace(":stream", "")
+
+    try:
+        from qtask.history import TaskHistoryStore
+        hist = TaskHistoryStore(r, base_name)
+        keep_days_used = days if days is not None else hist.get_keep_days()
+        tasks = hist.get_tasks(status=status, limit=limit, days=days)
+        counts = hist.count_by_status()
+
+        typer.echo(f"\n📋 History for queue: {typer.style(base_name, bold=True)}")
+        typer.echo(f"   Range: last {keep_days_used} days | Filter: {status} | Showing: {len(tasks)}/{limit}")
+        typer.echo(f"   ✅ completed={counts['completed']}  ❌ failed={counts['failed']}  ⏳ pending={counts['pending']}  total={counts['total']}\n")
+
+        if not tasks:
+            typer.echo("   (no records found)")
+            return
+
+        # 表头
+        header = f"{'TASK ID':<28} {'ACTION':<20} {'STATUS':<12} {'RETRIES':>7}  {'DURATION':>9}  {'CREATED'}"
+        typer.echo(typer.style(header, fg=typer.colors.BRIGHT_BLACK))
+        typer.echo("─" * 90)
+
+        import datetime
+        for t in tasks:
+            status_str = t.get("status", "?")
+            color = {"completed": typer.colors.GREEN, "failed": typer.colors.RED, "pending": typer.colors.YELLOW}.get(status_str, typer.colors.WHITE)
+            retries = int(t.get("retries", 0))
+            duration = t.get("duration_s")
+            dur_str = f"{duration:.2f}s" if duration is not None else "-"
+            created_ts = t.get("created_at", 0)
+            created_str = datetime.datetime.fromtimestamp(created_ts).strftime("%m-%d %H:%M:%S") if created_ts else "-"
+
+            row = (
+                f"{t.get('task_id', '?'):<28} "
+                f"{t.get('action', '?'):<20} "
+                f"{typer.style(f'{status_str:<12}', fg=color)} "
+                f"{retries:>7}  "
+                f"{dur_str:>9}  "
+                f"{created_str}"
+            )
+            typer.echo(row)
+
+        if tasks and tasks[0].get("fail_reason"):
+            typer.echo(f"\n   💬 Last fail reason: {tasks[0]['fail_reason'][:120]}")
+
+    except Exception as e:
+        typer.echo(f"❌ Error: {e}")
+        raise typer.Exit(1)
+
+
+# ──────────────────────── 新增：全局设置命令 ────────────────────────
+
+settings_app = typer.Typer(help="管理 qtask 全局设置")
+app.add_typer(settings_app, name="settings")
+
+@settings_app.command("show")
+def cmd_settings_show(
+    redis_url: str = typer.Option("redis://localhost:6379/0", "--redis-url", help="Redis 连接 URL"),
+):
+    """显示当前全局设置"""
+    r = get_redis_client(redis_url)
+    try:
+        from qtask.history import TaskHistoryStore, DEFAULT_KEEP_DAYS, SETTINGS_KEY
+        raw = r.hgetall(SETTINGS_KEY)
+        keep_days = int(raw.get("history_keep_days", DEFAULT_KEEP_DAYS))
+        typer.echo(f"\n⚙️  qtask Global Settings")
+        typer.echo(f"   history_keep_days = {typer.style(str(keep_days), bold=True, fg=typer.colors.CYAN)} days")
+    except Exception as e:
+        typer.echo(f"❌ Error: {e}")
+
+@settings_app.command("set")
+def cmd_settings_set(
+    keep_days: int = typer.Option(..., "--keep-days", "-k", help="保留历史任务的天数（1-365）"),
+    redis_url: str = typer.Option("redis://localhost:6379/0", "--redis-url", help="Redis 连接 URL"),
+):
+    """设置历史任务保留天数（K）"""
+    if keep_days < 1 or keep_days > 365:
+        typer.echo("❌ keep_days 必须在 1 到 365 之间")
+        raise typer.Exit(1)
+    r = get_redis_client(redis_url)
+    try:
+        from qtask.history import TaskHistoryStore
+        TaskHistoryStore.set_keep_days(r, keep_days)
+        typer.echo(f"✅ history_keep_days 已设置为 {typer.style(str(keep_days), bold=True, fg=typer.colors.CYAN)} 天")
+    except Exception as e:
+        typer.echo(f"❌ Error: {e}")
+
 
 def main():
     try:

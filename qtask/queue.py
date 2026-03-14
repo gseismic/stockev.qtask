@@ -1,8 +1,10 @@
 import json
+import time
 import redis
 from loguru import logger
 from typing import Tuple, Dict, Any, Optional
 from .storage import RemoteStorage
+from .history import TaskHistoryStore
 
 class SmartQueue:
     """基于 Redis Stream 支持大对象自动卸载和 ACK 机制的队列"""
@@ -16,10 +18,12 @@ class SmartQueue:
         storage: Optional[RemoteStorage] = None,
         large_threshold_bytes: int = 1024 * 50,  # 默认 >50KB 存远程
         auto_claim: bool = True,
-        claim_interval: int = 300  # 自动认领检查的最小间隔(秒)
+        claim_interval: int = 300,  # 自动认领检查的最小间隔(秒)
+        history: Optional[TaskHistoryStore] = None,
     ):
         self.redis = redis.from_url(redis_url, decode_responses=True)
         self.queue_name = f"{queue_name}:stream"
+        self._base_name = queue_name
         self.worker_group = worker_group
         self.worker_id = worker_id
         self.dlq = f"{queue_name}:stream_dlq"
@@ -29,6 +33,9 @@ class SmartQueue:
         self.auto_claim = auto_claim
         self.claim_interval = claim_interval
         self._last_claim_check = 0
+        
+        # 任务历史记录（可选注入）
+        self.history = history
         
         # 确保消费组存在
         self._ensure_consumer_group()
@@ -40,8 +47,8 @@ class SmartQueue:
             if "BUSYGROUP Consumer Group name already exists" not in str(e):
                 raise
 
-    def push(self, payload: Dict[str, Any]):
-        """入队：自动评估体积，拦截大对象，推入 Stream"""
+    def push(self, payload: Dict[str, Any]) -> str:
+        """入队：自动评估体积，拦截大对象，推入 Stream，返回 msg_id"""
         data_bytes = json.dumps(payload, ensure_ascii=False).encode('utf-8')
         data_len = len(data_bytes)
         
@@ -52,11 +59,23 @@ class SmartQueue:
         else:
             msg = data_bytes.decode('utf-8')
             
-        self.redis.xadd(self.queue_name, {"payload": msg})
+        msg_id = self.redis.xadd(self.queue_name, {"payload": msg})
+
+        # 记录历史
+        if self.history:
+            try:
+                action = payload.get("action", "unknown")
+                preview = json.dumps(payload, ensure_ascii=False)
+                self.history.record_push(msg_id, action, preview)
+                # 懒清理：每次 push 触发一次过期清理（Redis 操作轻量）
+                self.history.cleanup_old()
+            except Exception as e:
+                logger.warning(f"History record_push failed (non-critical): {e}")
+
+        return msg_id
 
     def pop_blocking(self, timeout: int = 0) -> Tuple[Optional[Dict[str, Any]], Optional[Dict[str, str]]]:
         """出队：使用消费组拉取数据，如果在 auto_claim 且到达检查时间则做一次抢占"""
-        import time
         if self.auto_claim:
             now = time.time()
             if now - self._last_claim_check >= self.claim_interval:
@@ -108,6 +127,12 @@ class SmartQueue:
                 self.queue_name, self.worker_group, self.worker_id, idle_time_ms, [msg_id]
             )
             if claimed:
+                # 认领时记录重试
+                if self.history:
+                    try:
+                        self.history.record_retry(msg_id)
+                    except Exception:
+                        pass
                 return claimed[0][0], claimed[0][1].get("payload")
         
         return None
@@ -133,6 +158,13 @@ class SmartQueue:
             claimed = self.redis.xclaim(
                 self.queue_name, self.worker_group, self.worker_id, idle_time_ms, claimed_ids
             )
+            # 批量记录重试
+            if self.history:
+                for c in claimed:
+                    try:
+                        self.history.record_retry(c[0])
+                    except Exception:
+                        pass
             count += len(claimed)
             
             if len(pending_info) < 100:
@@ -162,7 +194,7 @@ class SmartQueue:
             return False
 
     def _process_raw_msg(self, msg_id: str, raw_payload: str) -> Tuple[Optional[Dict[str, Any]], Optional[Dict[str, str]]]:
-        msg_context = {"msg_id": msg_id, "raw_payload": raw_payload}
+        msg_context = {"msg_id": msg_id, "raw_payload": raw_payload, "_pop_ts": time.time()}
         try:
             parsed = json.loads(raw_payload)
             if isinstance(parsed, dict) and parsed.get("_qtask_large_payload"):
@@ -182,6 +214,7 @@ class SmartQueue:
         """确认成功：ACK 消息，并清理关联的远程文件"""
         msg_id = msg_context["msg_id"]
         raw_payload = msg_context["raw_payload"]
+        pop_ts = msg_context.get("_pop_ts", time.time())
         
         # 确认消息
         try:
@@ -194,15 +227,26 @@ class SmartQueue:
                 raise
         
         # 清除大对象文件
-        parsed = json.loads(raw_payload)
-        if isinstance(parsed, dict) and parsed.get("_qtask_large_payload") and self.storage:
-            self.storage.delete(parsed["storage_key"])
+        try:
+            parsed = json.loads(raw_payload)
+            if isinstance(parsed, dict) and parsed.get("_qtask_large_payload") and self.storage:
+                self.storage.delete(parsed["storage_key"])
+        except Exception:
+            pass
 
-    def fail(self, msg_context: Dict[str, str]):
+        # 记录历史
+        if self.history:
+            try:
+                duration = time.time() - pop_ts
+                self.history.record_ack(msg_id, duration)
+            except Exception as e:
+                logger.warning(f"History record_ack failed (non-critical): {e}")
+
+    def fail(self, msg_context: Dict[str, str], reason: str = ""):
         """确认失败：移入死信队列并 ACK 原消息，以防止循环消费"""
-        self._move_to_dlq(msg_context)
+        self._move_to_dlq(msg_context, reason=reason)
 
-    def _move_to_dlq(self, msg_context: Dict[str, str]):
+    def _move_to_dlq(self, msg_context: Dict[str, str], reason: str = ""):
         msg_id = msg_context.get("msg_id")
         raw_payload = msg_context.get("raw_payload")
         
@@ -216,3 +260,11 @@ class SmartQueue:
             self.redis.xack(self.queue_name, self.worker_group, msg_id)
         except Exception as e:
             logger.error(f"Failed to move message {msg_id} to DLQ: {e}")
+
+        # 记录历史
+        if self.history:
+            try:
+                self.history.record_retry(msg_id)
+                self.history.record_fail(msg_id, reason or "moved to DLQ")
+            except Exception as e:
+                logger.warning(f"History record_fail failed (non-critical): {e}")
