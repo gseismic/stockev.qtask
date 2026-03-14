@@ -14,7 +14,7 @@ class RemoteStorage:
         
     def save_bytes(self, data_bytes: bytes) -> str:
         """直接上传二进制数据，减少内存复制"""
-        url = f"{self.api_base_url}/upload"
+        url = f"{self.api_base_url}/api/storage/upload"
         file_obj = io.BytesIO(data_bytes)
         files = {'file': ('data.json', file_obj, 'application/json')}
         
@@ -24,14 +24,14 @@ class RemoteStorage:
         
     def load(self, key: str) -> str:
         """下载并读取内容"""
-        url = f"{self.api_base_url}/download/{key}"
+        url = f"{self.api_base_url}/api/storage/download/{key}"
         response = requests.get(url)
         response.raise_for_status()
         return response.content.decode('utf-8')
             
     def delete(self, key: str) -> bool:
         """删除远程文件"""
-        url = f"{self.api_base_url}/delete/{key}"
+        url = f"{self.api_base_url}/api/storage/delete/{key}"
         try:
             response = requests.delete(url)
             return response.status_code == 200

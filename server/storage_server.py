@@ -40,7 +40,7 @@ def get_redis_client():
 STORAGE_DIR = "/tmp/qtask_storage"
 os.makedirs(STORAGE_DIR, exist_ok=True)
 
-@app.post("/upload/{file_id}")
+@app.post("/api/storage/upload/{file_id}")
 async def upload_file(file_id: str, file: UploadFile = File(...)):
     """接收 Worker 上传的大体积数据并返回唯一 Key"""
     # 基础的安全防御：防止目录穿越攻击 (Directory Traversal)
@@ -56,7 +56,7 @@ async def upload_file(file_id: str, file: UploadFile = File(...)):
             
     return {"status": "uploaded", "file_id": file_id}
 
-@app.get("/download/{file_id}")
+@app.get("/api/storage/download/{file_id}")
 async def download_file(file_id: str):
     """处理 Worker 下载数据的请求"""
     # 基础的安全防御：防止目录穿越攻击 (Directory Traversal)
@@ -70,7 +70,7 @@ async def download_file(file_id: str):
     # FileResponse 会自动处理大文件的流式传输
     return FileResponse(file_path)
 
-@app.delete("/delete/{file_id}")
+@app.delete("/api/storage/delete/{file_id}")
 async def delete_file(file_id: str):
     """处理中心节点入库后的文件清理请求"""
     if ".." in file_id or "/" in file_id:
