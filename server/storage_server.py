@@ -40,13 +40,10 @@ def get_redis_client():
 STORAGE_DIR = "/tmp/qtask_storage"
 os.makedirs(STORAGE_DIR, exist_ok=True)
 
-@app.post("/api/storage/upload/{file_id}")
-async def upload_file(file_id: str, file: UploadFile = File(...)):
+@app.post("/api/storage/upload")
+async def upload_file(file: UploadFile = File(...)):
     """接收 Worker 上传的大体积数据并返回唯一 Key"""
-    # 基础的安全防御：防止目录穿越攻击 (Directory Traversal)
-    if ".." in file_id or "/" in file_id:
-        raise HTTPException(status_code=400, detail="Invalid file_id")
-
+    file_id = uuid.uuid4().hex
     file_path = os.path.join(STORAGE_DIR, file_id)
     
     # 异步分块写入，防止将大文件全部加载到内存中导致 OOM
@@ -54,7 +51,7 @@ async def upload_file(file_id: str, file: UploadFile = File(...)):
         while content := await file.read(1024 * 1024):  # 每次读取 1MB
             await out_file.write(content)
             
-    return {"status": "uploaded", "file_id": file_id}
+    return {"status": "uploaded", "key": file_id}
 
 @app.get("/api/storage/download/{file_id}")
 async def download_file(file_id: str):

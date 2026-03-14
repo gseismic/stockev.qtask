@@ -1,2 +1,3 @@
 始终使用中文回答，Wlkthrough也应使用中文
 日志基于loguru
+cli基于typer
