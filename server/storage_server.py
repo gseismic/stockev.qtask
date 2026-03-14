@@ -414,8 +414,20 @@ def get_system_stats():
     except Exception:
         pass
 
-    # namespace 汇总（只列名称和队列列表，详细统计靠 /api/namespaces）
-    ns_list = sorted(known_namespaces)
+    # ── namespace 汇总 ──
+    # 来源1: qtask:namespaces 注册 Set（Worker 带 namespace 参数时自动写入）
+    # 来源2: 从 stream key 推断（key 格式 ns:queue:stream 有3段才认为有 ns）
+    inferred_ns: set = set()
+    for stream_key in queues:
+        # 去掉末尾 :stream → 剩余部分如 "stockev:spider:tasks" (3段) 或 "spider:tasks" (2段)
+        base = stream_key[:-7] if stream_key.endswith(":stream") else stream_key
+        parts = base.split(":")
+        if len(parts) >= 3:
+            # 3段及以上：第一段是 namespace（如 stockev:spider:tasks）
+            inferred_ns.add(parts[0])
+        # 2段（如 spider:tasks）：无 namespace，跳过
+
+    all_ns = sorted(known_namespaces | inferred_ns)
 
     return {
         "system": {
@@ -426,8 +438,9 @@ def get_system_stats():
         "storage": {"file_count": file_count, "size_mb": round(total_size / (1024 * 1024), 2)},
         "queues": queues,
         "settings": settings,
-        "namespaces": ns_list,
+        "namespaces": all_ns,
     }
+
 
 
 @app.get("/dashboard", response_class=HTMLResponse)
