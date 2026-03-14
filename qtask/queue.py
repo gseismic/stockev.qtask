@@ -35,6 +35,7 @@ class SmartQueue:
         claim_interval: int = 300,
         history: Optional[TaskHistoryStore] = None,
         namespace: str = None,             # 项目/任务级命名空间
+        history_store: bool = False,       # 快捷开启历史记录
     ):
         self.redis = redis.from_url(redis_url, decode_responses=True)
         self.namespace = namespace or ""
@@ -58,7 +59,13 @@ class SmartQueue:
         self.claim_interval = claim_interval
         self._last_claim_check = 0
 
-        self.history = history
+        if history:
+            self.history = history
+        elif history_store:
+            from .history import TaskHistoryStore
+            self.history = TaskHistoryStore(self.redis, self._base_name)
+        else:
+            self.history = None
 
         self._ensure_consumer_group()
         # 注册 namespace 元数据（非阻塞失败不影响主流程）
