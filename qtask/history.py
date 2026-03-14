@@ -117,10 +117,16 @@ class TaskHistoryStore:
                 continue
             if status != "all" and data.get("status") != status:
                 continue
+            # 补偿缺少 record_push 初始化时缺失的字段
+            if "task_id" not in data:
+                data["task_id"] = tid
+            if "action" not in data:
+                data["action"] = "-"
+            
             # 类型转换
             data["retries"] = int(data.get("retries", 0))
-            data["created_at"] = float(data.get("created_at", 0))
             data["updated_at"] = float(data.get("updated_at", 0))
+            data["created_at"] = float(data.get("created_at") or data["updated_at"])
             data["duration_s"] = float(data["duration_s"]) if data.get("duration_s") else None
             results.append(data)
 
