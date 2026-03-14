@@ -875,8 +875,11 @@ createApp({
         const tick = () => {
             if (isRefreshing.value && token.value) {
                 fetchStats();
-                if (activeTab.value==='queue') fetchTasks();
-                if (activeTab.value==='history') fetchHistory();
+                if (activeTab.value === 'queue') {
+                    if (queueSubTab.value === 'recent') fetchRecentTasks();
+                    else fetchTasks();
+                }
+                if (activeTab.value === 'history') fetchHistory();
             }
         };
 
