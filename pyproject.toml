@@ -1,0 +1,38 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "qtask"
+version = "0.1.0"
+description = "基于 Redis Stream 的轻量级大载荷任务队列框架"
+readme = "README.md"
+requires-python = ">=3.8"
+dependencies = [
+    "redis>=4.0.0",
+    "requests>=2.20.0",
+    "ujson>=5.0.0"
+]
+
+[project.optional-dependencies]
+server = [
+    "fastapi",
+    "uvicorn",
+    "aiofiles",
+    "python-multipart"
+]
+test = [
+    "pytest",
+    "pytest-mock"
+]
+
+[tool.pytest.ini_options]
+pythonpath = [
+    "."
+]
+testpaths = [
+    "tests"
+]
+
+[tool.setuptools.packages.find]
+include = ["qtask*"]
