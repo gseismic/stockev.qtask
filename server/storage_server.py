@@ -78,11 +78,52 @@ async def delete_file(file_id: str):
 
 # ============ Dashboard 及监控 API ============
 
+@app.post("/api/requeue/{queue_name}", dependencies=[Depends(get_current_username)])
+def requeue_dlq(queue_name: str):
+    """通过 HTTP API 将死信重放为主队列任务"""
+    r = get_redis_client()
+    # 注意，传过来的可能是带 ':stream' 的完整名字或者只有前缀，处理一下
+    base_name = queue_name.replace(":stream", "")
+    q_name = f"{base_name}:stream"
+    dlq_name = f"{base_name}:stream_dlq"
+    
+    try:
+        msgs = r.xrange(dlq_name, min="-", max="+")
+        if not msgs:
+            return {"status": "ignored", "message": "DLQ is empty"}
+        
+        pipe = r.pipeline()
+        for msg_id, payload in msgs:
+            orig_payload = payload.get("payload")
+            if orig_payload:
+                pipe.xadd(q_name, {"payload": orig_payload})
+                pipe.xdel(dlq_name, msg_id)
+        
+        pipe.execute()
+        return {"status": "success", "requeued": len(msgs)}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
 @app.get("/api/stats", dependencies=[Depends(get_current_username)])
 def get_system_stats():
     """获取系统和 Redis 的统计信息用于绘图"""
     cpu_percent = psutil.cpu_percent(interval=None)
     mem = psutil.virtual_memory()
+    
+    # 统计物理存储占用
+    total_size = 0
+    file_count = 0
+    if os.path.exists(STORAGE_DIR):
+        for f in os.listdir(STORAGE_DIR):
+            fp = os.path.join(STORAGE_DIR, f)
+            if os.path.isfile(fp):
+                total_size += os.path.getsize(fp)
+                file_count += 1
+                
+    storage_stats = {
+        "file_count": file_count,
+        "size_mb": round(total_size / (1024 * 1024), 2)
+    }
     
     # 扫描 Redis 中可能相关的队列 (以 :stream 结尾)
     r = get_redis_client()
@@ -91,7 +132,15 @@ def get_system_stats():
     try:
         keys = r.keys("*:stream")
         for k in keys:
-            q_info = {"length": r.xlen(k), "groups": []}
+            dlq_k = f"{k.replace(':stream', '')}:stream_dlq"
+            q_info = {"length": r.xlen(k), "dlq_length": 0, "groups": []}
+            
+            # 读取 dlq
+            try:
+                q_info["dlq_length"] = r.xlen(dlq_k)
+            except:
+                pass
+                
             try:
                 groups = r.xinfo_groups(k)
                 for g in groups:
@@ -112,6 +161,7 @@ def get_system_stats():
             "memory_percent": mem.percent,
             "memory_used_mb": round(mem.used / (1024 * 1024), 2)
         },
+        "storage": storage_stats,
         "queues": queues
     }
 
@@ -137,7 +187,10 @@ def read_dashboard():
             table { width: 100%; border-collapse: collapse; margin-top: 10px; }
             th, td { text-align: left; padding: 8px; border-bottom: 1px solid #eee; }
             th { color: #7f8c8d; font-weight: 500; }
-            .refresh { background: none; border: none; color: #3498db; cursor: pointer; text-decoration: underline; }
+            .dlq-badge { background: #e74c3c; color: white; padding: 2px 6px; border-radius: 4px; font-size: 12px; }
+            .btn-retry { background: #2ecc71; color: white; border: none; padding: 6px 12px; border-radius: 4px; cursor: pointer; font-size: 12px; }
+            .btn-retry:hover { background: #27ae60; }
+            .btn-retry:disabled { background: #95a5a6; cursor: not-allowed; }
         </style>
     </head>
     <body>
@@ -148,12 +201,16 @@ def read_dashboard():
         
         <div class="row">
             <div class="card">
-                <h2>💻 Host CPU Usage</h2>
+                <h2>💻 Host CPU</h2>
                 <div class="metric" id="cpu-val">--%</div>
             </div>
             <div class="card">
                 <h2>📈 Host Memory</h2>
                 <div class="metric" id="mem-val">--% <span>(-- MB)</span></div>
+            </div>
+            <div class="card">
+                <h2>📦 Large Object Storage</h2>
+                <div class="metric" id="store-val">-- Files <span>(-- MB)</span></div>
             </div>
         </div>
 
@@ -163,6 +220,22 @@ def read_dashboard():
         </div>
 
         <script>
+            async function retryDLQ(qname) {
+                if(!confirm(`Are you sure you want to requeue all failed tasks in ${qname}?`)) return;
+                try {
+                    const res = await fetch('/api/requeue/' + qname, {method: 'POST'});
+                    const data = await res.json();
+                    if(data.status === 'success') {
+                        alert(`Successfully requeued ${data.requeued} messages!`);
+                    } else {
+                        alert(data.message || "Failed");
+                    }
+                    fetchStats();
+                } catch(e) {
+                    alert("API Error: " + e);
+                }
+            }
+
             async function fetchStats() {
                 try {
                     const res = await fetch('/api/stats');
@@ -170,6 +243,7 @@ def read_dashboard():
                     
                     document.getElementById('cpu-val').innerText = data.system.cpu_percent + '%';
                     document.getElementById('mem-val').innerHTML = data.system.memory_percent + '% <span>(' + data.system.memory_used_mb + ' MB)</span>';
+                    document.getElementById('store-val').innerHTML = data.storage.file_count + ' Files <span>(' + data.storage.size_mb + ' MB)</span>';
                     
                     let qhtml = '';
                     if(Object.keys(data.queues).length === 0) {
@@ -177,7 +251,7 @@ def read_dashboard():
                     } else if (data.queues.error) {
                         qhtml = '<p style="color:red">Redis Error: ' + data.queues.error + '</p>';
                     } else {
-                        qhtml = '<table><tr><th>Queue Name</th><th>Total Messages</th><th>Consumer Groups</th></tr>';
+                        qhtml = '<table><tr><th>Queue Name</th><th>Messages</th><th>DLQ Status</th><th>Consumer Groups</th></tr>';
                         for (const [qname, qinfo] of Object.entries(data.queues)) {
                             let groupsHtml = '<ul>';
                             qinfo.groups.forEach(g => {
@@ -185,9 +259,15 @@ def read_dashboard():
                             });
                             groupsHtml += '</ul>';
                             
+                            let dlqHtml = qinfo.dlq_length > 0 ? 
+                                `<span class="dlq-badge">${qinfo.dlq_length} Failed</span>
+                                 <button class="btn-retry" onclick="retryDLQ('${qname}')">♻️ Retry</button>` : 
+                                `<span style="color:#2ecc71">0 Failed</span>`;
+                            
                             qhtml += `<tr>
                                 <td><b>${qname}</b></td>
                                 <td>${qinfo.length}</td>
+                                <td>${dlqHtml}</td>
                                 <td>${groupsHtml}</td>
                             </tr>`;
                         }

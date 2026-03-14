@@ -84,6 +84,41 @@ def cmd_dlq(
     except redis.exceptions.ResponseError as e:
         typer.echo(f"❌ Error: {e}")
 
+@app.command("requeue")
+def cmd_requeue(
+    queue_name: str = typer.Argument(..., help="The base name of the underlying queue (e.g., spider:tasks)"),
+    redis_url: str = typer.Option("redis://localhost:6379/0", help="Redis connection URL")
+):
+    """Re-queue all messages from DLQ back into the main queue"""
+    r = get_redis_client(redis_url)
+    q_name = f"{queue_name}:stream"
+    dlq_name = f"{queue_name}:stream_dlq"
+    
+    try:
+        msgs = r.xrange(dlq_name, min="-", max="+")
+        if not msgs:
+            typer.echo(f"✅ DLQ {dlq_name} is empty. Nothing to requeue.")
+            return
+            
+        typer.echo(f"🔄 Re-queuing {len(msgs)} messages from {dlq_name} to {q_name}...")
+        
+        # 使用 Pipeline 批量提交，保证效率
+        pipe = r.pipeline()
+        for msg_id, payload in msgs:
+            # 取出原始 payload
+            orig_payload = payload.get("payload")
+            if orig_payload:
+                # 重新作为全新任务放回主队列
+                pipe.xadd(q_name, {"payload": orig_payload})
+                # 从死信队列删除
+                pipe.xdel(dlq_name, msg_id)
+        
+        pipe.execute()
+        typer.echo(f"🎉 Successfully re-queued {len(msgs)} messages!")
+        
+    except redis.exceptions.ResponseError as e:
+        typer.echo(f"❌ Error: {e}")
+
 def main():
     try:
         app()
