@@ -14,15 +14,21 @@ class Worker:
         result_url: Optional[str] = None, 
         result_q_name: Optional[str] = None,
         storage_url: Optional[str] = None,
+        worker_group: str = "default_group",
         worker_id: Optional[str] = None
     ):
         self.worker_id = worker_id or uuid.uuid4().hex[:8]
+        self.worker_group = worker_group
         self.storage = RemoteStorage(storage_url) if storage_url else None
         
-        self.listen_q = SmartQueue(listen_url, listen_q_name, self.worker_id, self.storage)
+        self.listen_q = SmartQueue(
+            listen_url, listen_q_name, self.worker_group, self.worker_id, self.storage
+        )
         
         if result_url and result_q_name:
-            self.result_q = SmartQueue(result_url, result_q_name, self.worker_id, self.storage)
+            self.result_q = SmartQueue(
+                result_url, result_q_name, self.worker_group, self.worker_id, self.storage
+            )
         else:
             self.result_q = None
             
@@ -36,10 +42,10 @@ class Worker:
         return decorator
 
     def run(self):
-        print(f"[*] Worker [{self.worker_id}] Started. Listening: {self.listen_q.pending_q}")
+        print(f"[*] Worker [{self.worker_id}] in Group [{self.worker_group}] Started. Listening: {self.listen_q.queue_name}")
         while True:
             try:
-                payload, raw_msg = self.listen_q.pop_blocking()
+                payload, msg_context = self.listen_q.pop_blocking()
                 if not payload:
                     continue
                     
@@ -48,7 +54,8 @@ class Worker:
                 
                 if not handler:
                     print(f"[!] Unknown action: {action}")
-                    self.listen_q.fail(raw_msg)
+                    if msg_context:
+                        self.listen_q.fail(msg_context)
                     continue
 
                 # 执行业务逻辑
@@ -59,9 +66,9 @@ class Worker:
                     self.result_q.push(result_payload)
                     
                 # 成功后 ACK
-                self.listen_q.ack(raw_msg)
+                self.listen_q.ack(msg_context)
                 
             except Exception as e:
                 print(f"[-] Task Failed: {e}\n{traceback.format_exc()}")
-                if raw_msg:
-                    self.listen_q.fail(raw_msg)
+                if msg_context:
+                    self.listen_q.fail(msg_context)

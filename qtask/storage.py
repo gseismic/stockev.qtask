@@ -1,6 +1,6 @@
 import io
 import requests
-from typing import Optional
+from typing import Optional, Union
 
 class RemoteStorage:
     """基于 FastAPI 的远程对象存储客户端"""
@@ -10,8 +10,12 @@ class RemoteStorage:
         
     def save(self, data_str: str) -> str:
         """上传大字符串，返回唯一 Key"""
+        return self.save_bytes(data_str.encode('utf-8'))
+        
+    def save_bytes(self, data_bytes: bytes) -> str:
+        """直接上传二进制数据，减少内存复制"""
         url = f"{self.api_base_url}/upload"
-        file_obj = io.BytesIO(data_str.encode('utf-8'))
+        file_obj = io.BytesIO(data_bytes)
         files = {'file': ('data.json', file_obj, 'application/json')}
         
         response = requests.post(url, files=files)
