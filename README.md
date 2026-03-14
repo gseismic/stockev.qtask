@@ -112,6 +112,7 @@ storage = RemoteStorage("http://localhost:8000")
 queue = SmartQueue(
     redis_url="redis://localhost:6379/0",
     queue_name="spider:tasks",
+    namespace="my_project",           # 推荐：加入项目级命名空间
     worker_group="spider_group",
     storage=storage,                  # 可选，大载荷卸载
     large_threshold_bytes=1024 * 50,  # 默认 50KB
@@ -143,12 +144,12 @@ from qtask import Worker
 worker = Worker(
     listen_url="redis://localhost:6379/0",
     listen_q_name="spider:tasks",
+    namespace="my_project",                # 必须与生产者一致！
     storage_url="http://localhost:8000",   # 对应 FastAPI 存储服务
-    worker_group="spider_group",
-    worker_id="worker-01",                 # 不指定则自动生成
+    worker_group="spider_group",           # 不指定默认按 namespace 自动生成
+    worker_id="worker-01",                 # 不指定则自动生成带 hostname 的 ID
     auto_claim=True,                       # 自动认领 Zombie 任务
     claim_interval=300,                    # 认领检查间隔（秒）
-    enable_history=True,                   # 开启任务历史记录（默认 True）
 )
 
 @worker.on("scrape_stock")
@@ -180,6 +181,7 @@ worker = Worker(
     listen_q_name="spider:tasks",
     result_url="redis://localhost:6379/0",  # 结果推往此 URL
     result_q_name="db:tasks",               # 结果队列名
+    namespace="my_project",
     storage_url="http://localhost:8000",
     worker_group="spider_group",
 )
@@ -197,6 +199,7 @@ def handle_scrape(task):
 worker2 = Worker(
     listen_url="redis://localhost:6379/0",
     listen_q_name="db:tasks",
+    namespace="my_project",
     storage_url="http://localhost:8000",
     worker_group="db_group",
 )
