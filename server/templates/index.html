@@ -1,1003 +1,789 @@
 <!DOCTYPE html>
 <html lang="zh-CN">
-
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>qtask Professional Dashboard</title>
     <script src="https://unpkg.com/vue@3/dist/vue.global.prod.js"></script>
     <script src="https://cdn.tailwindcss.com"></script>
-    <!-- Lucide Icons -->
     <script src="https://unpkg.com/lucide@latest"></script>
     <style>
-        .fade-enter-active,
-        .fade-leave-active {
-            transition: opacity 0.3s ease;
-        }
-
-        .fade-enter-from,
-        .fade-leave-to {
-            opacity: 0;
-        }
-
-        ::-webkit-scrollbar {
-            width: 6px;
-            height: 6px;
-        }
-
-        ::-webkit-scrollbar-track {
-            background: #f1f1f1;
-            border-radius: 4px;
-        }
-
-        ::-webkit-scrollbar-thumb {
-            background: #c1c1c1;
-            border-radius: 4px;
-        }
-
-        ::-webkit-scrollbar-thumb:hover {
-            background: #a8a8a8;
-        }
+        .fade-enter-active, .fade-leave-active { transition: opacity 0.3s ease; }
+        .fade-enter-from, .fade-leave-to { opacity: 0; }
+        ::-webkit-scrollbar { width: 6px; height: 6px; }
+        ::-webkit-scrollbar-track { background: #f1f1f1; border-radius: 4px; }
+        ::-webkit-scrollbar-thumb { background: #c1c1c1; border-radius: 4px; }
+        ::-webkit-scrollbar-thumb:hover { background: #a8a8a8; }
+        [v-cloak] { display: none; }
     </style>
 </head>
-
 <body class="bg-gray-50 text-slate-800 font-sans h-screen overflow-hidden flex">
-    <div id="app" class="w-full h-full flex" v-cloak>
+<div id="app" class="w-full h-full flex" v-cloak>
 
-        <!-- Login Form -->
-        <div v-if="!token" class="fixed inset-0 bg-slate-900 flex items-center justify-center z-50">
-            <div class="bg-white p-8 rounded-xl shadow-2xl w-full max-w-md">
-                <div class="flex items-center justify-center mb-8">
-                    <i data-lucide="layers" class="w-10 h-10 text-indigo-600 mr-3"></i>
-                    <h1 class="text-3xl font-bold text-slate-800">qtask Studio</h1>
-                </div>
-                <form @submit.prevent="login" class="space-y-6">
-                    <div>
-                        <label class="block text-sm font-medium text-slate-700">Username</label>
-                        <input v-model="loginForm.username" type="text" required
-                            class="mt-1 block w-full px-4 py-2 bg-slate-50 border border-slate-200 rounded-lg focus:ring-2 focus:ring-indigo-500 outline-none transition"
-                            placeholder="admin">
-                    </div>
-                    <div>
-                        <label class="block text-sm font-medium text-slate-700">Password</label>
-                        <input v-model="loginForm.password" type="password" required
-                            class="mt-1 block w-full px-4 py-2 bg-slate-50 border border-slate-200 rounded-lg focus:ring-2 focus:ring-indigo-500 outline-none transition"
-                            placeholder="••••••••">
-                    </div>
-                    <div v-if="loginError" class="text-red-500 text-sm font-medium">{{ loginError }}</div>
-                    <button type="submit" :disabled="loading.login"
-                        class="w-full flex justify-center py-2.5 px-4 rounded-lg shadow-sm text-sm font-medium text-white bg-indigo-600 hover:bg-indigo-700 focus:outline-none transition disabled:opacity-50">
-                        <span v-if="!loading.login">Sign In</span>
-                        <i v-else data-lucide="loader-2" class="w-5 h-5 animate-spin"></i>
-                    </button>
-                </form>
+    <!-- ═══════════ Login ═══════════ -->
+    <div v-if="!token" class="fixed inset-0 bg-slate-900 flex items-center justify-center z-50">
+        <div class="bg-white p-8 rounded-xl shadow-2xl w-full max-w-md">
+            <div class="flex items-center justify-center mb-8">
+                <i data-lucide="layers" class="w-10 h-10 text-indigo-600 mr-3"></i>
+                <h1 class="text-3xl font-bold text-slate-800">qtask Studio</h1>
             </div>
+            <form @submit.prevent="login" class="space-y-6">
+                <div>
+                    <label class="block text-sm font-medium text-slate-700">Username</label>
+                    <input v-model="loginForm.username" type="text" required
+                        class="mt-1 block w-full px-4 py-2 bg-slate-50 border border-slate-200 rounded-lg focus:ring-2 focus:ring-indigo-500 outline-none">
+                </div>
+                <div>
+                    <label class="block text-sm font-medium text-slate-700">Password</label>
+                    <input v-model="loginForm.password" type="password" required
+                        class="mt-1 block w-full px-4 py-2 bg-slate-50 border border-slate-200 rounded-lg focus:ring-2 focus:ring-indigo-500 outline-none">
+                </div>
+                <div v-if="loginError" class="text-red-500 text-sm font-medium">{{ loginError }}</div>
+                <button type="submit" :disabled="loading.login"
+                    class="w-full flex justify-center py-2.5 px-4 rounded-lg text-sm font-medium text-white bg-indigo-600 hover:bg-indigo-700 transition disabled:opacity-50">
+                    <span v-if="!loading.login">Sign In</span>
+                    <i v-else data-lucide="loader-2" class="w-5 h-5 animate-spin"></i>
+                </button>
+            </form>
         </div>
+    </div>
 
-        <!-- Main Dashboard -->
-        <template v-else>
-            <!-- Sidebar -->
-            <aside class="w-64 bg-slate-900 text-white flex flex-col shadow-xl z-20">
-                <div class="h-16 flex items-center px-6 border-b border-slate-800">
-                    <i data-lucide="activity" class="w-6 h-6 text-indigo-400 mr-2"></i>
-                    <span class="text-lg font-bold tracking-wider">qtask Console</span>
-                </div>
+    <!-- ═══════════ Main Dashboard ═══════════ -->
+    <template v-else>
 
-                <div class="flex-1 overflow-y-auto py-6">
-                    <nav class="space-y-1 px-3">
-                        <a href="#" @click.prevent="switchTab('overview')"
-                            :class="['group flex items-center px-3 py-2.5 text-sm font-medium rounded-lg mb-4', activeTab === 'overview' ? 'bg-indigo-600 text-white' : 'text-slate-300 hover:bg-slate-800 hover:text-white']">
-                            <i data-lucide="pie-chart" class="w-5 h-5 mr-3"></i> Realtime Overview
-                        </a>
+        <!-- Sidebar -->
+        <aside class="w-64 bg-slate-900 text-white flex flex-col shadow-xl z-20">
+            <div class="h-16 flex items-center px-6 border-b border-slate-800">
+                <i data-lucide="activity" class="w-6 h-6 text-indigo-400 mr-2"></i>
+                <span class="text-lg font-bold tracking-wider">qtask Console</span>
+            </div>
 
-                        <div class="px-3 text-xs font-semibold text-slate-500 uppercase tracking-wider mb-2 mt-6">Active
-                            Queues</div>
-
-                        <!-- Queue List in Sidebar -->
-                        <div v-if="Object.keys(stats.queues || {}).length === 0"
-                            class="px-3 py-2 text-sm text-slate-500">No queues found</div>
-                        <a v-for="(info, qname) in stats.queues" :key="qname" href="#"
-                            @click.prevent="openQueueDetail(qname)"
-                            :class="['group flex items-center justify-between px-3 py-2 text-sm font-medium rounded-lg transition-colors', (activeTab === 'queue' || activeTab === 'history') && activeQueue === qname ? 'bg-indigo-600/20 text-indigo-300' : 'text-slate-300 hover:bg-slate-800']">
-                            <div class="flex items-center truncate">
-                                <i data-lucide="database" class="w-4 h-4 mr-2 text-slate-400"></i>
-                                <span class="truncate">{{ qname.replace(':stream', '') }}</span>
-                            </div>
-                            <div class="flex items-center gap-1">
-                                <!-- failed badge from history -->
-                                <span v-if="info.history_counts && info.history_counts.failed > 0"
-                                    class="bg-red-500/20 text-red-400 py-0.5 px-1.5 rounded-full text-xs">{{ info.history_counts.failed }}</span>
-                                <!-- pending badge -->
-                                <span v-if="info.dlq_length > 0 && !(info.history_counts && info.history_counts.failed > 0)"
-                                    class="bg-red-500/20 text-red-400 py-0.5 px-2 rounded-full text-xs">{{ info.dlq_length }}</span>
-                            </div>
-                        </a>
-                    </nav>
-                </div>
-
-                <div class="p-4 border-t border-slate-800 space-y-3">
-                    <!-- Settings Entry -->
-                    <a href="#" @click.prevent="switchTab('settings')"
-                        :class="['flex items-center px-3 py-2 text-sm font-medium rounded-lg transition-colors', activeTab === 'settings' ? 'bg-indigo-600/20 text-indigo-300' : 'text-slate-400 hover:bg-slate-800 hover:text-white']">
-                        <i data-lucide="settings" class="w-4 h-4 mr-2"></i> Settings
+            <div class="flex-1 overflow-y-auto py-4">
+                <!-- Overview -->
+                <nav class="px-3">
+                    <a href="#" @click.prevent="switchTab('overview')"
+                        :class="['flex items-center px-3 py-2.5 text-sm font-medium rounded-lg mb-3', activeTab==='overview'?'bg-indigo-600 text-white':'text-slate-300 hover:bg-slate-800']">
+                        <i data-lucide="pie-chart" class="w-5 h-5 mr-3"></i> System Overview
                     </a>
-                    <div class="flex flex-col space-y-2">
-                        <label class="text-xs text-slate-400 flex items-center justify-between">
-                            Refresh Rate: <span class="text-white">{{ refreshRate }}s</span>
-                        </label>
-                        <input type="range" min="1" max="30" v-model="refreshRate"
-                            class="w-full h-1 bg-slate-700 rounded-lg appearance-none cursor-pointer">
+
+                    <!-- Namespace Section -->
+                    <div class="mb-3">
+                        <div class="px-3 text-xs font-semibold text-slate-500 uppercase tracking-wider mb-2 flex items-center justify-between">
+                            <span class="flex items-center gap-1.5">
+                                <i data-lucide="folder" class="w-3.5 h-3.5"></i> Namespace
+                            </span>
+                            <button v-if="selectedNamespace" @click="selectedNamespace=''"
+                                class="text-indigo-400 hover:text-white text-[10px]">clear</button>
+                        </div>
+
+                        <!-- Namespace filter buttons -->
+                        <div class="px-2 space-y-0.5">
+                            <button @click="selectedNamespace=''; switchTab('overview')"
+                                :class="['w-full text-left px-3 py-1.5 rounded text-xs font-medium transition flex items-center gap-2',
+                                    selectedNamespace===''?'bg-indigo-600/30 text-indigo-300':'text-slate-400 hover:bg-slate-800 hover:text-slate-200']">
+                                <i data-lucide="globe" class="w-3 h-3"></i> All Namespaces
+                            </button>
+                            <button v-for="ns in stats.namespaces" :key="ns" @click="selectNamespace(ns)"
+                                :class="['w-full text-left px-3 py-1.5 rounded text-xs font-medium transition flex items-center justify-between group',
+                                    selectedNamespace===ns?'bg-indigo-600/40 text-indigo-200':'text-slate-400 hover:bg-slate-800 hover:text-slate-200']">
+                                <span class="flex items-center gap-2 truncate">
+                                    <i data-lucide="box" class="w-3 h-3 shrink-0"></i>
+                                    <span class="truncate">{{ ns }}</span>
+                                </span>
+                                <span class="text-[10px] bg-slate-700 group-hover:bg-slate-600 px-1.5 py-0.5 rounded ml-1 shrink-0">
+                                    {{ nsQueueCount(ns) }}</span>
+                            </button>
+                        </div>
                     </div>
-                    <button @click="logout"
-                        class="flex w-full items-center px-3 py-2 text-sm font-medium text-slate-400 rounded-lg hover:bg-slate-800 hover:text-white transition-colors">
-                        <i data-lucide="log-out" class="w-4 h-4 mr-2"></i> Sign Out
+
+                    <!-- Queue List -->
+                    <div class="px-3 text-xs font-semibold text-slate-500 uppercase tracking-wider mb-2 mt-4 flex items-center gap-1.5">
+                        <i data-lucide="database" class="w-3.5 h-3.5"></i> Queues
+                        <span v-if="filteredQueues.length > 0" class="text-slate-600">({{ filteredQueues.length }})</span>
+                    </div>
+                    <div v-if="filteredQueues.length === 0" class="px-3 py-2 text-xs text-slate-500">No queues found</div>
+                    <a v-for="[qname, info] in filteredQueues" :key="qname" href="#"
+                        @click.prevent="openQueueDetail(qname)"
+                        :class="['flex items-center justify-between px-3 py-2 text-sm font-medium rounded-lg transition-colors',
+                            (activeTab==='queue'||activeTab==='history')&&activeQueue===qname?'bg-indigo-600/20 text-indigo-300':'text-slate-300 hover:bg-slate-800']">
+                        <div class="flex items-center truncate gap-2">
+                            <span class="w-1.5 h-1.5 rounded-full shrink-0"
+                                :class="info.dlq_length>0?'bg-red-500':'bg-green-500'"></span>
+                            <span class="truncate text-xs">{{ displayQueueName(qname, info.namespace) }}</span>
+                        </div>
+                        <div class="flex gap-1">
+                            <span v-if="info.history_counts?.failed>0"
+                                class="bg-red-500/20 text-red-400 py-0.5 px-1.5 rounded-full text-[10px]">{{ info.history_counts.failed }}</span>
+                        </div>
+                    </a>
+                </nav>
+            </div>
+
+            <!-- Sidebar Footer -->
+            <div class="p-4 border-t border-slate-800 space-y-2">
+                <a href="#" @click.prevent="switchTab('settings')"
+                    :class="['flex items-center px-3 py-2 text-sm font-medium rounded-lg transition-colors', activeTab==='settings'?'bg-indigo-600/20 text-indigo-300':'text-slate-400 hover:bg-slate-800 hover:text-white']">
+                    <i data-lucide="settings" class="w-4 h-4 mr-2"></i> Settings
+                </a>
+                <div class="flex flex-col gap-1">
+                    <label class="text-xs text-slate-400 flex items-center justify-between">
+                        Refresh: <span class="text-white">{{ refreshRate }}s</span>
+                    </label>
+                    <input type="range" min="1" max="30" v-model="refreshRate"
+                        class="w-full h-1 bg-slate-700 rounded-lg appearance-none cursor-pointer">
+                </div>
+                <button @click="logout"
+                    class="flex w-full items-center px-3 py-2 text-sm font-medium text-slate-400 rounded-lg hover:bg-slate-800 hover:text-white transition-colors">
+                    <i data-lucide="log-out" class="w-4 h-4 mr-2"></i> Sign Out
+                </button>
+            </div>
+        </aside>
+
+        <!-- Main Content -->
+        <main class="flex-1 flex flex-col bg-slate-50 relative overflow-hidden">
+
+            <!-- Health Banners -->
+            <transition name="fade">
+                <div v-if="!serverHealth.online"
+                    class="bg-red-600 text-white text-sm flex items-center justify-center gap-2 py-2 px-4 z-30">
+                    <i data-lucide="wifi-off" class="w-4 h-4 shrink-0"></i>
+                    <span class="font-medium">Server Offline</span>
+                    <span class="opacity-80 text-xs">— {{ serverHealth.failMsg || 'connection failed' }}, retrying…</span>
+                    <span v-if="serverHealth.failCount>1" class="ml-2 bg-red-700 px-2 py-0.5 rounded-full text-xs">{{ serverHealth.failCount }}× failed</span>
+                </div>
+                <div v-else-if="!serverHealth.redisOk"
+                    class="bg-amber-500 text-white text-sm flex items-center justify-center gap-2 py-2 px-4 z-30">
+                    <i data-lucide="database-zap" class="w-4 h-4 shrink-0"></i>
+                    <span class="font-medium">Redis Unreachable</span>
+                    <span class="opacity-80 text-xs">— {{ serverHealth.redisMsg }}</span>
+                </div>
+            </transition>
+
+            <!-- Topbar -->
+            <header class="h-16 bg-white border-b border-slate-200 flex items-center justify-between px-8 z-10">
+                <h2 class="text-xl font-semibold text-slate-800 flex items-center gap-3">
+                    <!-- Namespace badge in header -->
+                    <span v-if="selectedNamespace" class="text-xs font-semibold bg-indigo-100 text-indigo-700 px-2 py-1 rounded-full flex items-center gap-1">
+                        <i data-lucide="box" class="w-3 h-3"></i>{{ selectedNamespace }}
+                    </span>
+                    <span v-if="activeTab==='overview'">System Overview</span>
+                    <span v-else-if="activeTab==='ns'">Namespace: {{ activeNs }}</span>
+                    <span v-else-if="activeTab==='settings'">Settings</span>
+                    <span v-else-if="activeTab==='history'">History: {{ displayQueueName(activeQueue, stats.queues[activeQueue]?.namespace) }}</span>
+                    <span v-else>Queue: {{ displayQueueName(activeQueue, stats.queues[activeQueue]?.namespace) }}</span>
+                </h2>
+                <div class="flex items-center gap-4">
+                    <!-- Health Badge -->
+                    <div class="flex items-center gap-1.5 text-xs font-medium px-2.5 py-1.5 rounded-full border transition-all"
+                        :class="serverHealth.online?(serverHealth.redisOk?'bg-emerald-50 text-emerald-700 border-emerald-200':'bg-amber-50 text-amber-700 border-amber-200'):'bg-red-50 text-red-700 border-red-200'"
+                        :title="serverHealth.online?`Server OK · Redis ${serverHealth.redisOk?'OK':'DOWN'}`:'Server unreachable'">
+                        <span class="w-2 h-2 rounded-full"
+                            :class="serverHealth.online?(serverHealth.redisOk?'bg-emerald-500 animate-pulse':'bg-amber-400'):'bg-red-500'"></span>
+                        <span>{{ serverHealth.online?(serverHealth.redisOk?'Online':'Degraded'):'Offline' }}</span>
+                    </div>
+                    <div class="flex items-center text-sm font-medium text-slate-500 bg-slate-100 px-3 py-1.5 rounded-full">
+                        <span class="w-2 h-2 rounded-full mr-2" :class="isRefreshing?'bg-green-500':'bg-slate-300'"></span>
+                        Auto-Sync: {{ isRefreshing ? 'ON' : 'OFF' }}
+                    </div>
+                    <button @click="toggleRefresh" class="p-2 text-slate-400 hover:text-indigo-600 hover:bg-indigo-50 rounded-lg transition">
+                        <i :data-lucide="isRefreshing?'pause-circle':'play-circle'" class="w-5 h-5"></i>
                     </button>
                 </div>
-            </aside>
+            </header>
 
-            <!-- Main Content Area -->
-            <main class="flex-1 flex flex-col bg-slate-50 relative overflow-hidden">
-                <!-- Server Offline Banner -->
-                <transition name="fade">
-                    <div v-if="!serverHealth.online"
-                        class="bg-red-600 text-white text-sm flex items-center justify-center gap-2 py-2 px-4 z-30">
-                        <i data-lucide="wifi-off" class="w-4 h-4 shrink-0"></i>
-                        <span class="font-medium">Server Offline</span>
-                        <span class="opacity-80 text-xs">— {{ serverHealth.failMsg || 'connection failed' }}, retrying…</span>
-                        <span v-if="serverHealth.failCount > 1" class="ml-2 bg-red-700 px-2 py-0.5 rounded-full text-xs">
-                            {{ serverHealth.failCount }}× failed
-                        </span>
+            <!-- Scrollable Content -->
+            <div class="flex-1 overflow-y-auto p-8">
+
+                <!-- ═══ Overview Tab ═══ -->
+                <div v-if="activeTab==='overview'" class="space-y-6">
+
+                    <!-- System Metrics -->
+                    <div class="grid grid-cols-1 md:grid-cols-3 gap-6">
+                        <div class="bg-white p-6 rounded-xl border border-slate-200 shadow-sm flex items-center">
+                            <div class="bg-blue-50 p-4 rounded-lg mr-4"><i data-lucide="cpu" class="w-8 h-8 text-blue-500"></i></div>
+                            <div><p class="text-sm font-medium text-slate-500">CPU Usage</p>
+                                <h3 class="text-3xl font-bold">{{ stats?.system?.cpu_percent||0 }}%</h3></div>
+                        </div>
+                        <div class="bg-white p-6 rounded-xl border border-slate-200 shadow-sm flex items-center">
+                            <div class="bg-emerald-50 p-4 rounded-lg mr-4"><i data-lucide="memory-stick" class="w-8 h-8 text-emerald-500"></i></div>
+                            <div><p class="text-sm font-medium text-slate-500">Memory</p>
+                                <h3 class="text-3xl font-bold">{{ stats?.system?.memory_percent||0 }}%</h3>
+                                <p class="text-xs text-slate-400">{{ stats?.system?.memory_used_mb||0 }} MB used</p></div>
+                        </div>
+                        <div class="bg-white p-6 rounded-xl border border-slate-200 shadow-sm flex items-center">
+                            <div class="bg-purple-50 p-4 rounded-lg mr-4"><i data-lucide="hard-drive" class="w-8 h-8 text-purple-500"></i></div>
+                            <div><p class="text-sm font-medium text-slate-500">Storage</p>
+                                <h3 class="text-3xl font-bold">{{ stats?.storage?.file_count||0 }} Files</h3>
+                                <p class="text-xs text-slate-400">{{ stats?.storage?.size_mb||0 }} MB</p></div>
+                        </div>
                     </div>
-                    <!-- Redis degraded warning (server up but Redis down) -->
-                    <div v-else-if="serverHealth.online && !serverHealth.redisOk"
-                        class="bg-amber-500 text-white text-sm flex items-center justify-center gap-2 py-2 px-4 z-30">
-                        <i data-lucide="database-zap" class="w-4 h-4 shrink-0"></i>
-                        <span class="font-medium">Redis Unreachable</span>
-                        <span class="opacity-80 text-xs">— {{ serverHealth.redisMsg }}</span>
-                    </div>
-                </transition>
-                <!-- Topbar -->
-                <header class="h-16 bg-white border-b border-slate-200 flex items-center justify-between px-8 z-10">
-                    <h2 class="text-xl font-semibold text-slate-800 capitalize">
-                        <span v-if="activeTab === 'overview'">System Overview</span>
-                        <span v-else-if="activeTab === 'settings'">Settings</span>
-                        <span v-else-if="activeTab === 'history'">Task History: {{ activeQueue.replace(':stream', '') }}</span>
-                        <span v-else>Queue Inspector: {{ activeQueue.replace(':stream', '') }}</span>
-                    </h2>
-                    <div class="flex items-center space-x-4">
-                        <!-- Server health badge -->
-                        <div :title="serverHealth.online ? `Server OK · Redis ${serverHealth.redisOk ? 'OK' : 'DOWN'}` : 'Server unreachable'"
-                            class="flex items-center gap-1.5 text-xs font-medium px-2.5 py-1.5 rounded-full border transition-all"
-                            :class="serverHealth.online
-                                ? (serverHealth.redisOk ? 'bg-emerald-50 text-emerald-700 border-emerald-200' : 'bg-amber-50 text-amber-700 border-amber-200')
-                                : 'bg-red-50 text-red-700 border-red-200'">
-                            <!-- animated pulse when checking first time, solid when known -->
-                            <span class="w-2 h-2 rounded-full"
-                                :class="serverHealth.online
-                                    ? (serverHealth.redisOk ? 'bg-emerald-500 animate-pulse' : 'bg-amber-400')
-                                    : 'bg-red-500'"></span>
-                            <span v-if="serverHealth.online && serverHealth.redisOk">Online</span>
-                            <span v-else-if="serverHealth.online">Degraded</span>
-                            <span v-else>Offline</span>
-                        </div>
-                        <div
-                            class="flex items-center text-sm font-medium text-slate-500 bg-slate-100 px-3 py-1.5 rounded-full">
-                            <span class="w-2 h-2 rounded-full mr-2"
-                                :class="isRefreshing ? 'bg-green-500' : 'bg-slate-300'"></span>
-                            Auto-Sync: {{ isRefreshing ? 'ON' : 'OFF' }}
-                        </div>
-                        <button @click="toggleRefresh"
-                            class="p-2 text-slate-400 hover:text-indigo-600 hover:bg-indigo-50 rounded-lg transition">
-                            <i data-lucide="pause-circle" v-if="isRefreshing" class="w-5 h-5"></i>
-                            <i data-lucide="play-circle" v-else class="w-5 h-5"></i>
-                        </button>
-                    </div>
-                </header>
 
-                <!-- Scrollable Content -->
-                <div class="flex-1 overflow-y-auto p-8 relative">
-
-                    <!-- ═══════════════ Overview Tab ═══════════════ -->
-                    <div v-if="activeTab === 'overview'" class="space-y-6">
-                        <!-- Top Metrics -->
-                        <div class="grid grid-cols-1 md:grid-cols-3 gap-6">
-                            <div class="bg-white p-6 rounded-xl border border-slate-200 shadow-sm flex items-center">
-                                <div class="bg-blue-50 p-4 rounded-lg mr-4"><i data-lucide="cpu"
-                                        class="w-8 h-8 text-blue-500"></i></div>
-                                <div>
-                                    <p class="text-sm font-medium text-slate-500">CPU Usage</p>
-                                    <h3 class="text-3xl font-bold text-slate-800">{{ stats?.system?.cpu_percent || 0 }}%
-                                    </h3>
-                                </div>
-                            </div>
-                            <div class="bg-white p-6 rounded-xl border border-slate-200 shadow-sm flex items-center">
-                                <div class="bg-emerald-50 p-4 rounded-lg mr-4"><i data-lucide="memory-stick"
-                                        class="w-8 h-8 text-emerald-500"></i></div>
-                                <div>
-                                    <p class="text-sm font-medium text-slate-500">Memory Load</p>
-                                    <h3 class="text-3xl font-bold text-slate-800">{{ stats?.system?.memory_percent || 0
-                                        }}%</h3>
-                                    <p class="text-xs text-slate-400 mt-1">{{ stats?.system?.memory_used_mb || 0 }} MB
-                                        Used</p>
-                                </div>
-                            </div>
-                            <div class="bg-white p-6 rounded-xl border border-slate-200 shadow-sm flex items-center">
-                                <div class="bg-purple-50 p-4 rounded-lg mr-4"><i data-lucide="hard-drive"
-                                        class="w-8 h-8 text-purple-500"></i></div>
-                                <div>
-                                    <p class="text-sm font-medium text-slate-500">FastAPI Storage</p>
-                                    <h3 class="text-3xl font-bold text-slate-800">{{ stats?.storage?.file_count || 0 }}
-                                        Files</h3>
-                                    <p class="text-xs text-slate-400 mt-1">{{ stats?.storage?.size_mb || 0 }} MB Total
-                                    </p>
-                                </div>
-                            </div>
-                        </div>
-
-                        <!-- Queues Cards -->
-                        <h3 class="text-lg font-semibold text-slate-800 mt-8 mb-4 flex items-center"><i
-                                data-lucide="layers" class="w-5 h-5 mr-2 text-slate-400"></i> Running Queues</h3>
-                        <div v-if="!stats.queues || Object.keys(stats.queues).length === 0"
-                            class="p-8 text-center text-slate-500 bg-white rounded-xl border border-dashed border-slate-300">
-                            No active stream queues found in Redis.
-                        </div>
-                        <div class="grid grid-cols-1 lg:grid-cols-2 gap-6" v-else>
-                            <div v-for="(info, qname) in stats.queues" :key="qname" @click="openQueueDetail(qname)"
-                                class="bg-white p-6 rounded-xl border border-slate-200 shadow-sm hover:shadow-md hover:border-indigo-300 transition-all cursor-pointer group">
-                                <div class="flex justify-between items-start mb-4">
-                                    <div class="flex items-center">
-                                        <div class="w-2 h-2 rounded-full bg-green-500 mr-2 animate-pulse"></div>
-                                        <h4 class="font-bold text-slate-800 text-lg">{{ qname.replace(':stream','') }}
-                                        </h4>
+                    <!-- Namespace Cards (when namespaces exist) -->
+                    <template v-if="stats.namespaces && stats.namespaces.length > 0">
+                        <h3 class="text-lg font-semibold flex items-center gap-2">
+                            <i data-lucide="folder-open" class="w-5 h-5 text-slate-400"></i> Namespaces
+                        </h3>
+                        <div class="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
+                            <div v-for="ns in stats.namespaces" :key="ns"
+                                class="bg-white border border-slate-200 rounded-xl p-5 shadow-sm hover:shadow-md hover:border-indigo-300 transition-all cursor-pointer"
+                                @click="selectNamespace(ns)">
+                                <div class="flex items-start justify-between mb-3">
+                                    <div class="flex items-center gap-2">
+                                        <div class="w-8 h-8 rounded-lg bg-indigo-100 flex items-center justify-center">
+                                            <i data-lucide="box" class="w-4 h-4 text-indigo-600"></i>
+                                        </div>
+                                        <div>
+                                            <h4 class="font-bold text-slate-800">{{ ns }}</h4>
+                                            <p class="text-xs text-slate-400">{{ nsQueueCount(ns) }} queues</p>
+                                        </div>
                                     </div>
-                                    <span
-                                        class="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-slate-100 text-slate-800 border border-slate-200">Total:
-                                        {{ info.length }}</span>
+                                    <button @click.stop="showNsPurge(ns)"
+                                        class="p-1.5 rounded-lg text-slate-300 hover:text-red-500 hover:bg-red-50 transition"
+                                        title="Purge namespace">
+                                        <i data-lucide="trash-2" class="w-4 h-4"></i>
+                                    </button>
                                 </div>
-
-                                <!-- History counts summary row -->
-                                <div v-if="info.history_counts && info.history_counts.total > 0"
-                                    class="grid grid-cols-3 gap-2 mb-3">
+                                <!-- Aggregate stats from per-queue history_counts -->
+                                <div class="grid grid-cols-3 gap-2">
                                     <div class="bg-emerald-50 rounded-lg p-2 text-center">
-                                        <div class="text-lg font-bold text-emerald-600">{{ info.history_counts.completed || 0 }}</div>
-                                        <div class="text-xs text-emerald-500">Completed</div>
+                                        <div class="text-lg font-bold text-emerald-600">{{ nsAgg(ns).completed }}</div>
+                                        <div class="text-xs text-emerald-500">Done</div>
                                     </div>
                                     <div class="bg-amber-50 rounded-lg p-2 text-center">
-                                        <div class="text-lg font-bold text-amber-600">{{ info.history_counts.pending || 0 }}</div>
+                                        <div class="text-lg font-bold text-amber-600">{{ nsAgg(ns).pending }}</div>
                                         <div class="text-xs text-amber-500">Pending</div>
                                     </div>
                                     <div class="bg-red-50 rounded-lg p-2 text-center">
-                                        <div class="text-lg font-bold text-red-600">{{ info.history_counts.failed || 0 }}</div>
+                                        <div class="text-lg font-bold text-red-600">{{ nsAgg(ns).failed }}</div>
                                         <div class="text-xs text-red-500">Failed</div>
                                     </div>
                                 </div>
-
-                                <div
-                                    class="flex justify-between items-center bg-slate-50 p-3 rounded-lg border border-slate-100">
-                                    <div class="text-sm">
-                                        <div class="text-slate-500 mb-1">Consumer Groups : <span
-                                                class="font-bold text-slate-700">{{ info.groups?.length || 0 }}</span>
-                                        </div>
-                                        <div class="flex -space-x-2 mt-2">
-                                            <div v-for="g in info.groups"
-                                                class="px-2 py-1 bg-white border border-slate-200 rounded text-xs text-slate-600 shadow-sm z-10">
-                                                {{ g.name }} ({{g.pending}} pending)</div>
-                                        </div>
-                                    </div>
-                                    <div v-if="info.dlq_length > 0" class="text-right">
-                                        <div class="text-xs text-red-500 font-bold mb-1 uppercase tracking-wide">Dead
-                                            Letters</div>
-                                        <div class="text-2xl font-black text-red-600">{{ info.dlq_length }}</div>
-                                    </div>
-                                    <div v-else class="text-right">
-                                        <div class="text-xs text-emerald-500 font-bold mb-1 uppercase tracking-wide">
-                                            Health</div>
-                                        <i data-lucide="check-circle" class="w-8 h-8 text-emerald-400 ml-auto"></i>
-                                    </div>
-                                </div>
                             </div>
                         </div>
+                    </template>
+
+                    <!-- Queue Cards -->
+                    <h3 class="text-lg font-semibold flex items-center gap-2 mt-4">
+                        <i data-lucide="layers" class="w-5 h-5 text-slate-400"></i> Queues
+                        <span v-if="selectedNamespace" class="text-sm font-normal text-slate-500">in <span class="text-indigo-600 font-medium">{{ selectedNamespace }}</span></span>
+                    </h3>
+                    <div v-if="filteredQueues.length===0" class="p-8 text-center text-slate-500 bg-white rounded-xl border border-dashed border-slate-300">
+                        No active stream queues found.
                     </div>
-
-                    <!-- ═══════════════ Queue Detail Tab ═══════════════ -->
-                    <div v-if="activeTab === 'queue'" class="flex flex-col h-full space-y-4">
-                        <!-- Toolbar -->
-                        <div
-                            class="bg-white p-4 rounded-xl border border-slate-200 shadow-sm flex flex-wrap gap-4 items-center justify-between">
-                            <div class="flex space-x-2">
-                                <button @click="taskFilter = 'all'; fetchTasks()"
-                                    :class="['px-4 py-2 rounded-lg text-sm font-medium transition', taskFilter === 'all' ? 'bg-slate-800 text-white' : 'bg-slate-100 text-slate-600 hover:bg-slate-200']">Recent
-                                    Tasks (Stream)</button>
-                                <button @click="taskFilter = 'failed'; fetchTasks()"
-                                    :class="['px-4 py-2 rounded-lg text-sm font-medium transition flex items-center', taskFilter === 'failed' ? 'bg-red-600 text-white' : 'bg-slate-100 text-slate-600 hover:bg-red-50']">
-                                    Dead Letters (DLQ)
-                                    <span v-if="stats.queues[activeQueue] && stats.queues[activeQueue].dlq_length > 0"
-                                        class="ml-2 bg-white text-red-600 text-xs px-1.5 py-0.5 rounded-full">{{
-                                        stats.queues[activeQueue].dlq_length }}</span>
-                                </button>
-                                <!-- Switch to History view -->
-                                <button @click="switchTab('history')"
-                                    class="px-4 py-2 rounded-lg text-sm font-medium transition bg-indigo-50 text-indigo-700 hover:bg-indigo-100 flex items-center">
-                                    <i data-lucide="history" class="w-4 h-4 mr-1.5"></i> Full History
-                                </button>
-                            </div>
-                            <div class="flex space-x-2">
-                                <button
-                                    v-if="taskFilter === 'failed' && (stats.queues[activeQueue]?.dlq_length > 0 || tasks.length > 0)"
-                                    @click="requeueAll"
-                                    class="flex items-center px-4 py-2 bg-emerald-500 hover:bg-emerald-600 text-white text-sm font-medium rounded-lg shadow-sm transition">
-                                    <i data-lucide="refresh-cw" class="w-4 h-4 mr-2"></i> Requeue All Failed
-                                </button>
-
-                                <div class="relative group ml-4 inline-block">
-                                    <button
-                                        class="flex items-center px-4 py-2 bg-red-100 text-red-700 hover:bg-red-600 hover:text-white text-sm font-medium rounded-lg shadow-sm transition">
-                                        <i data-lucide="shield-alert" class="w-4 h-4 mr-2"></i> Danger
-                                    </button>
-                                    <div
-                                        class="absolute right-0 pt-2 w-48 opacity-0 invisible group-hover:opacity-100 group-hover:visible transition-all z-50">
-                                        <div class="bg-white border border-slate-200 rounded-lg shadow-xl overflow-hidden">
-                                            <button @click="resetGroupCmd"
-                                                class="w-full text-left px-4 py-2 text-sm text-amber-700 hover:bg-amber-50 font-medium border-b border-slate-100">Reset
-                                                Group ($)</button>
-                                            <button @click="clearQueueCmd"
-                                                class="w-full text-left px-4 py-2 text-sm text-red-700 hover:bg-red-50 font-medium font-bold flex justify-between items-center">Purge
-                                                Data <i data-lucide="flame" class="w-4 h-4 text-red-500"></i></button>
-                                        </div>
+                    <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
+                        <div v-for="[qname, info] in filteredQueues" :key="qname" @click="openQueueDetail(qname)"
+                            class="bg-white p-6 rounded-xl border border-slate-200 shadow-sm hover:shadow-md hover:border-indigo-300 transition-all cursor-pointer">
+                            <div class="flex justify-between items-start mb-3">
+                                <div>
+                                    <div class="flex items-center gap-2">
+                                        <div class="w-2 h-2 rounded-full bg-green-500 animate-pulse"></div>
+                                        <h4 class="font-bold text-slate-800 text-lg">{{ displayQueueName(qname, info.namespace) }}</h4>
                                     </div>
-                                </div>
-                                <button @click="fetchTasks"
-                                    class="p-2 ml-2 text-slate-400 hover:text-indigo-600 hover:bg-indigo-50 rounded-lg transition"
-                                    title="Force Refresh">
-                                    <i data-lucide="rotate-cw" class="w-5 h-5"></i>
-                                </button>
-                            </div>
-                        </div>
-
-                        <!-- Data Grid -->
-                        <div
-                            class="bg-white border border-slate-200 rounded-xl shadow-sm flex-1 overflow-hidden flex flex-col">
-                            <div class="overflow-x-auto">
-                                <table class="min-w-full divide-y divide-slate-200">
-                                    <thead class="bg-slate-50">
-                                        <tr>
-                                            <th scope="col"
-                                                class="px-6 py-3 text-left text-xs font-semibold text-slate-500 uppercase tracking-wider">
-                                                Message ID</th>
-                                            <th scope="col"
-                                                class="px-6 py-3 text-left text-xs font-semibold text-slate-500 uppercase tracking-wider">
-                                                Action</th>
-                                            <th scope="col"
-                                                class="px-6 py-3 text-left text-xs font-semibold text-slate-500 uppercase tracking-wider">
-                                                Status</th>
-                                            <th scope="col"
-                                                class="px-6 py-3 text-left text-xs font-semibold text-slate-500 uppercase tracking-wider">
-                                                Payload Preview</th>
-                                            <th scope="col"
-                                                class="px-6 py-3 text-right text-xs font-semibold text-slate-500 uppercase tracking-wider">
-                                                Operate</th>
-                                        </tr>
-                                    </thead>
-                                    <tbody class="bg-white divide-y divide-slate-200 whitespace-nowrap text-sm">
-                                        <tr v-if="loading.tasks">
-                                            <td colspan="5" class="px-6 py-12 text-center text-slate-400">
-                                                <i data-lucide="loader-2"
-                                                    class="w-8 h-8 animate-spin mx-auto mb-2 text-indigo-400"></i>
-                                                Loading tasks...
-                                            </td>
-                                        </tr>
-                                        <tr v-else-if="tasks.length === 0">
-                                            <td colspan="5" class="px-6 py-12 text-center text-slate-400">
-                                                <i data-lucide="inbox"
-                                                    class="w-10 h-10 mx-auto mb-2 text-slate-300"></i> No tasks found
-                                                for this view.
-                                            </td>
-                                        </tr>
-                                        <tr v-for="t in tasks" :key="t.id" class="hover:bg-slate-50 transition-colors">
-                                            <td class="px-6 py-4 font-mono text-xs text-slate-600">
-                                                {{ t.id }}
-                                                <div v-if="t.orig_id" class="text-[10px] text-slate-400 mt-1">orig: {{
-                                                    t.orig_id }}</div>
-                                            </td>
-                                            <td
-                                                class="px-6 py-4 font-medium text-slate-900 border-l-2 border-transparent relative pl-8">
-                                                <span
-                                                    class="absolute left-3 top-1/2 -translate-y-1/2 w-2 h-2 rounded-full"
-                                                    :class="t.status === 'failed' ? 'bg-red-500' : 'bg-indigo-500'"></span>
-                                                {{ t.action }}
-                                            </td>
-                                            <td class="px-6 py-4">
-                                                <span
-                                                    :class="['px-2 inline-flex text-xs leading-5 font-semibold rounded-full', t.status === 'failed' ? 'bg-red-100 text-red-800' : 'bg-indigo-100 text-indigo-800']">
-                                                    {{ t.status.toUpperCase() }}
-                                                </span>
-                                            </td>
-                                            <td class="px-6 py-4 text-slate-500 font-mono text-xs max-w-xs truncate"
-                                                :title="JSON.stringify(t.payload)">
-                                                {{ JSON.stringify(t.payload).substring(0, 50) }}{{
-                                                JSON.stringify(t.payload).length > 50 ? '...' : '' }}
-                                            </td>
-                                            <td class="px-6 py-4 text-right">
-                                                <button v-if="t.status === 'failed'" @click="requeueSingle(t.id)"
-                                                    class="text-emerald-600 hover:text-emerald-900 font-medium hover:underline flex items-center justify-end w-full">
-                                                    <i data-lucide="corner-up-left" class="w-4 h-4 mr-1"></i> Retry
-                                                </button>
-                                                <span v-else class="text-slate-300">-</span>
-                                            </td>
-                                        </tr>
-                                    </tbody>
-                                </table>
-                            </div>
-                        </div>
-                    </div>
-
-                    <!-- ═══════════════ History Tab ═══════════════ -->
-                    <div v-if="activeTab === 'history'" class="flex flex-col h-full space-y-4">
-                        <!-- History Toolbar -->
-                        <div class="bg-white p-4 rounded-xl border border-slate-200 shadow-sm flex flex-wrap gap-3 items-center justify-between">
-                            <div class="flex space-x-2 flex-wrap gap-y-2">
-                                <button v-for="s in ['all','pending','completed','failed']" :key="s"
-                                    @click="histFilter = s; fetchHistory()"
-                                    :class="['px-3 py-1.5 rounded-lg text-xs font-semibold transition flex items-center gap-1',
-                                        histFilter === s
-                                          ? (s==='failed' ? 'bg-red-600 text-white' : s==='completed' ? 'bg-emerald-600 text-white' : s==='pending' ? 'bg-amber-500 text-white' : 'bg-slate-800 text-white')
-                                          : 'bg-slate-100 text-slate-600 hover:bg-slate-200']">
-                                    <span v-if="s==='completed'">✅</span>
-                                    <span v-else-if="s==='failed'">❌</span>
-                                    <span v-else-if="s==='pending'">⏳</span>
-                                    <span v-else>📋</span>
-                                    {{ s.charAt(0).toUpperCase() + s.slice(1) }}
-                                    <span v-if="histCounts[s] !== undefined"
-                                        class="ml-1 px-1.5 py-0.5 rounded-full text-[11px]"
-                                        :class="histFilter === s ? 'bg-white/20' : 'bg-slate-200 text-slate-700'">
-                                        {{ histCounts[s] }}
+                                    <!-- Namespace badge on card -->
+                                    <span v-if="info.namespace" class="mt-1 inline-flex items-center gap-1 text-xs bg-indigo-50 text-indigo-600 px-2 py-0.5 rounded-full border border-indigo-100">
+                                        <i data-lucide="box" class="w-2.5 h-2.5"></i>{{ info.namespace }}
                                     </span>
-                                </button>
+                                </div>
+                                <span class="text-xs font-medium bg-slate-100 text-slate-800 px-2.5 py-0.5 rounded-full border">{{ info.length }} msgs</span>
                             </div>
-                            <div class="flex items-center gap-3">
-                                <label class="text-xs text-slate-500 flex items-center gap-1">
-                                    <i data-lucide="calendar" class="w-3.5 h-3.5"></i>
-                                    Last
-                                    <input type="number" v-model.number="histDays" min="1" max="365"
-                                           @change="fetchHistory()"
-                                           class="w-14 mx-1 px-2 py-1 border border-slate-200 rounded text-xs text-center focus:ring-1 focus:ring-indigo-400 outline-none">
-                                    days
-                                </label>
-                                <label class="text-xs text-slate-500 flex items-center gap-1">
-                                    Show
-                                    <select v-model.number="histLimit" @change="fetchHistory()"
-                                        class="mx-1 px-2 py-1 border border-slate-200 rounded text-xs focus:ring-1 focus:ring-indigo-400 outline-none">
-                                        <option value="50">50</option>
-                                        <option value="100">100</option>
-                                        <option value="200">200</option>
-                                        <option value="500">500</option>
-                                    </select>
-                                </label>
-                                <button @click="fetchHistory"
-                                    class="p-1.5 text-slate-400 hover:text-indigo-600 hover:bg-indigo-50 rounded-lg transition" title="Refresh">
-                                    <i data-lucide="rotate-cw" class="w-4 h-4"></i>
-                                </button>
-                                <!-- Back to Queue view -->
-                                <button @click="switchTab('queue')"
-                                    class="flex items-center px-3 py-1.5 text-xs font-medium bg-slate-100 text-slate-600 hover:bg-slate-200 rounded-lg transition">
-                                    <i data-lucide="arrow-left" class="w-3.5 h-3.5 mr-1"></i> Queue View
-                                </button>
+                            <div v-if="info.history_counts?.total>0" class="grid grid-cols-3 gap-2 mb-3">
+                                <div class="bg-emerald-50 rounded-lg p-2 text-center">
+                                    <div class="text-lg font-bold text-emerald-600">{{ info.history_counts.completed||0 }}</div>
+                                    <div class="text-xs text-emerald-500">Completed</div>
+                                </div>
+                                <div class="bg-amber-50 rounded-lg p-2 text-center">
+                                    <div class="text-lg font-bold text-amber-600">{{ info.history_counts.pending||0 }}</div>
+                                    <div class="text-xs text-amber-500">Pending</div>
+                                </div>
+                                <div class="bg-red-50 rounded-lg p-2 text-center">
+                                    <div class="text-lg font-bold text-red-600">{{ info.history_counts.failed||0 }}</div>
+                                    <div class="text-xs text-red-500">Failed</div>
+                                </div>
                             </div>
-                        </div>
-
-                        <!-- Stats Summary Bar -->
-                        <div v-if="histCounts.total > 0" class="grid grid-cols-4 gap-3">
-                            <div class="bg-white rounded-xl border border-slate-200 p-3 flex items-center gap-3 shadow-sm">
-                                <div class="w-8 h-8 rounded-lg bg-slate-100 flex items-center justify-center text-lg">📋</div>
-                                <div><p class="text-xs text-slate-500">Total</p><p class="text-xl font-bold text-slate-800">{{ histCounts.total }}</p></div>
-                            </div>
-                            <div class="bg-white rounded-xl border border-emerald-200 p-3 flex items-center gap-3 shadow-sm">
-                                <div class="w-8 h-8 rounded-lg bg-emerald-50 flex items-center justify-center text-lg">✅</div>
-                                <div><p class="text-xs text-emerald-600">Completed</p><p class="text-xl font-bold text-emerald-700">{{ histCounts.completed }}</p></div>
-                            </div>
-                            <div class="bg-white rounded-xl border border-amber-200 p-3 flex items-center gap-3 shadow-sm">
-                                <div class="w-8 h-8 rounded-lg bg-amber-50 flex items-center justify-center text-lg">⏳</div>
-                                <div><p class="text-xs text-amber-600">Pending</p><p class="text-xl font-bold text-amber-700">{{ histCounts.pending }}</p></div>
-                            </div>
-                            <div class="bg-white rounded-xl border border-red-200 p-3 flex items-center gap-3 shadow-sm">
-                                <div class="w-8 h-8 rounded-lg bg-red-50 flex items-center justify-center text-lg">❌</div>
-                                <div><p class="text-xs text-red-600">Failed</p><p class="text-xl font-bold text-red-700">{{ histCounts.failed }}</p></div>
-                            </div>
-                        </div>
-
-                        <!-- History Data Grid -->
-                        <div class="bg-white border border-slate-200 rounded-xl shadow-sm flex-1 overflow-hidden flex flex-col">
-                            <div class="overflow-x-auto flex-1">
-                                <table class="min-w-full divide-y divide-slate-200">
-                                    <thead class="bg-slate-50 sticky top-0 z-10">
-                                        <tr>
-                                            <th class="px-5 py-3 text-left text-xs font-semibold text-slate-500 uppercase tracking-wider">Task ID</th>
-                                            <th class="px-5 py-3 text-left text-xs font-semibold text-slate-500 uppercase tracking-wider">Action</th>
-                                            <th class="px-5 py-3 text-left text-xs font-semibold text-slate-500 uppercase tracking-wider">Status</th>
-                                            <th class="px-5 py-3 text-center text-xs font-semibold text-slate-500 uppercase tracking-wider">🔁 Retries</th>
-                                            <th class="px-5 py-3 text-right text-xs font-semibold text-slate-500 uppercase tracking-wider">Duration</th>
-                                            <th class="px-5 py-3 text-left text-xs font-semibold text-slate-500 uppercase tracking-wider">Created</th>
-                                            <th class="px-5 py-3 text-left text-xs font-semibold text-slate-500 uppercase tracking-wider">Fail Reason</th>
-                                        </tr>
-                                    </thead>
-                                    <tbody class="bg-white divide-y divide-slate-100 text-sm">
-                                        <tr v-if="loading.history">
-                                            <td colspan="7" class="px-6 py-12 text-center text-slate-400">
-                                                <i data-lucide="loader-2" class="w-8 h-8 animate-spin mx-auto mb-2 text-indigo-400"></i>
-                                                Loading history...
-                                            </td>
-                                        </tr>
-                                        <tr v-else-if="histTasks.length === 0">
-                                            <td colspan="7" class="px-6 py-12 text-center text-slate-400">
-                                                <i data-lucide="clock" class="w-10 h-10 mx-auto mb-2 text-slate-300"></i>
-                                                No history found. Make sure Worker has <code class="text-xs bg-slate-100 px-1 rounded">enable_history=True</code>.
-                                            </td>
-                                        </tr>
-                                        <tr v-for="t in histTasks" :key="t.task_id"
-                                            class="hover:bg-slate-50 transition-colors">
-                                            <td class="px-5 py-3 font-mono text-xs text-slate-500 max-w-[200px] truncate" :title="t.task_id">
-                                                {{ t.task_id }}
-                                            </td>
-                                            <td class="px-5 py-3 font-medium text-slate-800">{{ t.action || '-' }}</td>
-                                            <td class="px-5 py-3">
-                                                <span :class="['px-2 py-0.5 inline-flex text-xs font-semibold rounded-full',
-                                                    t.status === 'completed' ? 'bg-emerald-100 text-emerald-800' :
-                                                    t.status === 'failed'    ? 'bg-red-100 text-red-800' :
-                                                                               'bg-amber-100 text-amber-800']">
-                                                    {{ t.status }}
-                                                </span>
-                                            </td>
-                                            <td class="px-5 py-3 text-center">
-                                                <span v-if="t.retries > 0"
-                                                    class="inline-flex items-center justify-center w-6 h-6 rounded-full bg-orange-100 text-orange-700 text-xs font-bold">
-                                                    {{ t.retries }}
-                                                </span>
-                                                <span v-else class="text-slate-300 text-xs">—</span>
-                                            </td>
-                                            <td class="px-5 py-3 text-right text-xs text-slate-600 font-mono">
-                                                {{ t.duration_s != null ? t.duration_s.toFixed(3) + 's' : '—' }}
-                                            </td>
-                                            <td class="px-5 py-3 text-xs text-slate-500 whitespace-nowrap">
-                                                {{ fmtTs(t.created_at) }}
-                                            </td>
-                                            <td class="px-5 py-3 text-xs text-red-500 max-w-[180px] truncate" :title="t.fail_reason">
-                                                {{ t.fail_reason || '' }}
-                                            </td>
-                                        </tr>
-                                    </tbody>
-                                </table>
+                            <div class="flex justify-between items-center bg-slate-50 p-3 rounded-lg border border-slate-100 text-sm">
+                                <div>
+                                    <span class="text-slate-500">Groups: </span>
+                                    <span class="font-bold text-slate-700">{{ info.groups?.length||0 }}</span>
+                                    <div class="flex flex-wrap gap-1 mt-1">
+                                        <span v-for="g in info.groups" class="px-2 py-0.5 bg-white border border-slate-200 rounded text-xs text-slate-600">
+                                            {{ g.name }} ({{g.pending}})
+                                        </span>
+                                    </div>
+                                </div>
+                                <div v-if="info.dlq_length>0" class="text-right">
+                                    <div class="text-xs text-red-500 font-bold uppercase">Dead Letters</div>
+                                    <div class="text-2xl font-black text-red-600">{{ info.dlq_length }}</div>
+                                </div>
+                                <div v-else class="text-right">
+                                    <i data-lucide="check-circle" class="w-8 h-8 text-emerald-400 ml-auto"></i>
+                                </div>
                             </div>
                         </div>
                     </div>
+                </div>
 
-                    <!-- ═══════════════ Settings Tab ═══════════════ -->
-                    <div v-if="activeTab === 'settings'" class="max-w-xl space-y-6">
-                        <div class="bg-white rounded-xl border border-slate-200 shadow-sm p-6">
-                            <h3 class="text-base font-semibold text-slate-800 mb-1 flex items-center gap-2">
-                                <i data-lucide="calendar-range" class="w-5 h-5 text-indigo-500"></i>
-                                History Retention
-                            </h3>
-                            <p class="text-sm text-slate-500 mb-5">
-                                设置保留任务历史记录的天数（K）。超过保留期的记录会在下次写入时被懒清理。
-                            </p>
-                            <div class="flex items-center gap-4">
-                                <label class="text-sm font-medium text-slate-700 whitespace-nowrap">Keep History (days)</label>
-                                <input type="number" v-model.number="settingsForm.history_keep_days" min="1" max="365"
-                                    class="w-24 px-3 py-2 border border-slate-200 rounded-lg text-sm text-center focus:ring-2 focus:ring-indigo-400 outline-none">
-                                <button @click="saveSettings" :disabled="loading.settings"
-                                    class="px-5 py-2 bg-indigo-600 hover:bg-indigo-700 text-white text-sm font-medium rounded-lg transition disabled:opacity-50 flex items-center gap-2">
-                                    <i v-if="loading.settings" data-lucide="loader-2" class="w-4 h-4 animate-spin"></i>
-                                    <i v-else data-lucide="save" class="w-4 h-4"></i>
-                                    Save
-                                </button>
-                            </div>
-                            <p class="mt-3 text-xs text-slate-400">
-                                当前生效值：<span class="font-bold text-indigo-600">{{ stats?.settings?.history_keep_days ?? settingsForm.history_keep_days }}</span> 天
-                                &nbsp;·&nbsp; 有效范围：1 ~ 365 天
-                            </p>
+                <!-- ═══ Queue Detail Tab ═══ -->
+                <div v-if="activeTab==='queue'" class="flex flex-col h-full space-y-4">
+                    <div class="bg-white p-4 rounded-xl border border-slate-200 shadow-sm flex flex-wrap gap-4 items-center justify-between">
+                        <div class="flex gap-2 flex-wrap">
+                            <button @click="taskFilter='all'; fetchTasks()"
+                                :class="['px-4 py-2 rounded-lg text-sm font-medium transition', taskFilter==='all'?'bg-slate-800 text-white':'bg-slate-100 text-slate-600 hover:bg-slate-200']">
+                                Recent Tasks</button>
+                            <button @click="taskFilter='failed'; fetchTasks()"
+                                :class="['px-4 py-2 rounded-lg text-sm font-medium transition flex items-center', taskFilter==='failed'?'bg-red-600 text-white':'bg-slate-100 text-slate-600 hover:bg-red-50']">
+                                Dead Letters
+                                <span v-if="stats.queues[activeQueue]?.dlq_length>0" class="ml-2 bg-white text-red-600 text-xs px-1.5 py-0.5 rounded-full">{{ stats.queues[activeQueue].dlq_length }}</span>
+                            </button>
+                            <button @click="switchTab('history')"
+                                class="px-4 py-2 rounded-lg text-sm font-medium transition bg-indigo-50 text-indigo-700 hover:bg-indigo-100 flex items-center">
+                                <i data-lucide="history" class="w-4 h-4 mr-1.5"></i> Full History
+                            </button>
                         </div>
-
-                        <div class="bg-white rounded-xl border border-slate-200 shadow-sm p-6">
-                            <h3 class="text-base font-semibold text-slate-800 mb-1 flex items-center gap-2">
-                                <i data-lucide="info" class="w-5 h-5 text-slate-400"></i>
-                                CLI Usage
-                            </h3>
-                            <p class="text-sm text-slate-500 mb-3">可以通过 CLI 进行相同设置：</p>
-                            <pre class="bg-slate-900 text-emerald-400 rounded-lg p-4 text-xs overflow-x-auto leading-6">qtask settings show
-qtask settings set --keep-days 30
-qtask history &lt;queue&gt; --status completed --days 7</pre>
+                        <div class="flex gap-2">
+                            <button v-if="taskFilter==='failed'&&tasks.length>0" @click="requeueAll"
+                                class="flex items-center px-4 py-2 bg-emerald-500 hover:bg-emerald-600 text-white text-sm font-medium rounded-lg transition">
+                                <i data-lucide="refresh-cw" class="w-4 h-4 mr-2"></i> Requeue All
+                            </button>
+                            <div class="relative group">
+                                <button class="flex items-center px-4 py-2 bg-red-100 text-red-700 hover:bg-red-600 hover:text-white text-sm font-medium rounded-lg transition">
+                                    <i data-lucide="shield-alert" class="w-4 h-4 mr-2"></i> Danger
+                                </button>
+                                <div class="absolute right-0 pt-2 w-48 opacity-0 invisible group-hover:opacity-100 group-hover:visible transition-all z-50">
+                                    <div class="bg-white border border-slate-200 rounded-lg shadow-xl">
+                                        <button @click="resetGroupCmd" class="w-full text-left px-4 py-2 text-sm text-amber-700 hover:bg-amber-50 border-b border-slate-100">Reset Group ($)</button>
+                                        <button @click="clearQueueCmd" class="w-full text-left px-4 py-2 text-sm text-red-700 hover:bg-red-50 flex justify-between items-center">
+                                            Purge Queue <i data-lucide="flame" class="w-4 h-4 text-red-500"></i>
+                                        </button>
+                                    </div>
+                                </div>
+                            </div>
+                            <button @click="fetchTasks" class="p-2 text-slate-400 hover:text-indigo-600 hover:bg-indigo-50 rounded-lg transition">
+                                <i data-lucide="rotate-cw" class="w-5 h-5"></i>
+                            </button>
                         </div>
                     </div>
-
+                    <div class="bg-white border border-slate-200 rounded-xl shadow-sm flex-1 overflow-auto">
+                        <table class="min-w-full divide-y divide-slate-200">
+                            <thead class="bg-slate-50 sticky top-0">
+                                <tr>
+                                    <th class="px-6 py-3 text-left text-xs font-semibold text-slate-500 uppercase">Message ID</th>
+                                    <th class="px-6 py-3 text-left text-xs font-semibold text-slate-500 uppercase">Action</th>
+                                    <th class="px-6 py-3 text-left text-xs font-semibold text-slate-500 uppercase">Status</th>
+                                    <th class="px-6 py-3 text-left text-xs font-semibold text-slate-500 uppercase">Payload Preview</th>
+                                    <th class="px-6 py-3 text-right text-xs font-semibold text-slate-500 uppercase">Operate</th>
+                                </tr>
+                            </thead>
+                            <tbody class="bg-white divide-y divide-slate-200 text-sm">
+                                <tr v-if="loading.tasks"><td colspan="5" class="px-6 py-12 text-center text-slate-400"><i data-lucide="loader-2" class="w-8 h-8 animate-spin mx-auto mb-2 text-indigo-400"></i></td></tr>
+                                <tr v-else-if="tasks.length===0"><td colspan="5" class="px-6 py-12 text-center text-slate-400"><i data-lucide="inbox" class="w-10 h-10 mx-auto mb-2 text-slate-300"></i> No tasks</td></tr>
+                                <tr v-for="t in tasks" :key="t.id" class="hover:bg-slate-50">
+                                    <td class="px-6 py-4 font-mono text-xs text-slate-600">{{ t.id }}<div v-if="t.orig_id" class="text-[10px] text-slate-400">orig: {{ t.orig_id }}</div></td>
+                                    <td class="px-6 py-4 font-medium">{{ t.action }}</td>
+                                    <td class="px-6 py-4">
+                                        <span :class="['px-2 text-xs leading-5 font-semibold rounded-full', t.status==='failed'?'bg-red-100 text-red-800':'bg-indigo-100 text-indigo-800']">{{ t.status.toUpperCase() }}</span>
+                                    </td>
+                                    <td class="px-6 py-4 text-slate-500 font-mono text-xs max-w-xs truncate">{{ JSON.stringify(t.payload).substring(0,50) }}...</td>
+                                    <td class="px-6 py-4 text-right">
+                                        <button v-if="t.status==='failed'" @click="requeueSingle(t.id)" class="text-emerald-600 hover:underline text-sm flex items-center justify-end w-full">
+                                            <i data-lucide="corner-up-left" class="w-4 h-4 mr-1"></i> Retry
+                                        </button>
+                                        <span v-else class="text-slate-300">-</span>
+                                    </td>
+                                </tr>
+                            </tbody>
+                        </table>
+                    </div>
                 </div>
 
-                <!-- Ops Logs Toast -->
-                <div class="absolute bottom-6 right-6 z-50 flex flex-col-reverse justify-end gap-2 pointer-events-none">
-                    <transition-group name="fade">
-                        <div v-for="log in opsLogs" :key="log.id"
-                            :class="['pointer-events-auto px-4 py-3 rounded-lg shadow-lg border text-sm max-w-sm flex items-start', log.type === 'error' ? 'bg-red-50 text-red-800 border-red-200' : 'bg-slate-800 text-slate-100 border-slate-700']">
-                            <i v-if="log.type === 'error'" data-lucide="alert-circle"
-                                class="w-5 h-5 mr-3 shrink-0 text-red-500"></i>
-                            <i v-else-if="log.type === 'success'" data-lucide="check-circle-2"
-                                class="w-5 h-5 mr-3 shrink-0 text-emerald-400"></i>
-                            <i v-else data-lucide="info" class="w-5 h-5 mr-3 shrink-0 text-indigo-400"></i>
-                            <div>
-                                <h4 class="font-bold text-xs uppercase mb-0.5">{{ log.title }}</h4>
-                                <p class="opacity-90 leading-tight">{{ log.message }}</p>
-                            </div>
+                <!-- ═══ History Tab ═══ -->
+                <div v-if="activeTab==='history'" class="flex flex-col h-full space-y-4">
+                    <div class="bg-white p-4 rounded-xl border border-slate-200 shadow-sm flex flex-wrap gap-3 items-center justify-between">
+                        <div class="flex gap-2 flex-wrap">
+                            <button v-for="s in ['all','pending','completed','failed']" :key="s"
+                                @click="histFilter=s; fetchHistory()"
+                                :class="['px-3 py-1.5 rounded-lg text-xs font-semibold transition flex items-center gap-1',
+                                    histFilter===s?(s==='failed'?'bg-red-600 text-white':s==='completed'?'bg-emerald-600 text-white':s==='pending'?'bg-amber-500 text-white':'bg-slate-800 text-white'):'bg-slate-100 text-slate-600 hover:bg-slate-200']">
+                                <span>{{ {all:'📋',pending:'⏳',completed:'✅',failed:'❌'}[s] }}</span>
+                                {{ s[0].toUpperCase()+s.slice(1) }}
+                                <span v-if="histCounts[s]!==undefined" class="ml-1 px-1.5 py-0.5 rounded-full text-[11px]" :class="histFilter===s?'bg-white/20':'bg-slate-200 text-slate-700'">{{ histCounts[s] }}</span>
+                            </button>
                         </div>
-                    </transition-group>
+                        <div class="flex items-center gap-3">
+                            <label class="text-xs text-slate-500 flex items-center gap-1">
+                                <i data-lucide="calendar" class="w-3.5 h-3.5"></i> Last
+                                <input type="number" v-model.number="histDays" min="1" max="365" @change="fetchHistory()"
+                                    class="w-14 mx-1 px-2 py-1 border border-slate-200 rounded text-xs text-center focus:ring-1 focus:ring-indigo-400 outline-none"> days
+                            </label>
+                            <select v-model.number="histLimit" @change="fetchHistory()"
+                                class="px-2 py-1 border border-slate-200 rounded text-xs focus:ring-1 focus:ring-indigo-400 outline-none">
+                                <option value="50">50</option><option value="100">100</option><option value="200">200</option><option value="500">500</option>
+                            </select>
+                            <button @click="fetchHistory" class="p-1.5 text-slate-400 hover:text-indigo-600 hover:bg-indigo-50 rounded-lg"><i data-lucide="rotate-cw" class="w-4 h-4"></i></button>
+                            <button @click="switchTab('queue')" class="flex items-center px-3 py-1.5 text-xs font-medium bg-slate-100 text-slate-600 hover:bg-slate-200 rounded-lg">
+                                <i data-lucide="arrow-left" class="w-3.5 h-3.5 mr-1"></i> Queue View
+                            </button>
+                        </div>
+                    </div>
+                    <div v-if="histCounts.total>0" class="grid grid-cols-4 gap-3">
+                        <div v-for="[key,label,bg,tc] in [['total','Total','slate-100','slate-800'],['completed','Completed','emerald-50','emerald-700'],['pending','Pending','amber-50','amber-700'],['failed','Failed','red-50','red-700']]" :key="key"
+                            :class="`bg-${bg} rounded-xl border border-slate-200 p-3 flex items-center gap-3 shadow-sm`">
+                            <div class="w-8 h-8 rounded-lg bg-white flex items-center justify-center text-lg">{{ {total:'📋',completed:'✅',pending:'⏳',failed:'❌'}[key] }}</div>
+                            <div><p :class="`text-xs text-${tc}/70`">{{ label }}</p><p :class="`text-xl font-bold text-${tc}`">{{ histCounts[key] }}</p></div>
+                        </div>
+                    </div>
+                    <div class="bg-white border border-slate-200 rounded-xl shadow-sm flex-1 overflow-auto">
+                        <table class="min-w-full divide-y divide-slate-200">
+                            <thead class="bg-slate-50 sticky top-0">
+                                <tr>
+                                    <th class="px-5 py-3 text-left text-xs font-semibold text-slate-500 uppercase">Task ID</th>
+                                    <th class="px-5 py-3 text-left text-xs font-semibold text-slate-500 uppercase">Action</th>
+                                    <th class="px-5 py-3 text-left text-xs font-semibold text-slate-500 uppercase">Status</th>
+                                    <th class="px-5 py-3 text-center text-xs font-semibold text-slate-500 uppercase">🔁 Retries</th>
+                                    <th class="px-5 py-3 text-right text-xs font-semibold text-slate-500 uppercase">Duration</th>
+                                    <th class="px-5 py-3 text-left text-xs font-semibold text-slate-500 uppercase">Created</th>
+                                    <th class="px-5 py-3 text-left text-xs font-semibold text-slate-500 uppercase">Fail Reason</th>
+                                </tr>
+                            </thead>
+                            <tbody class="bg-white divide-y divide-slate-100 text-sm">
+                                <tr v-if="loading.history"><td colspan="7" class="px-6 py-12 text-center text-slate-400"><i data-lucide="loader-2" class="w-8 h-8 animate-spin mx-auto mb-2 text-indigo-400"></i></td></tr>
+                                <tr v-else-if="histTasks.length===0"><td colspan="7" class="px-6 py-12 text-center text-slate-400"><i data-lucide="clock" class="w-10 h-10 mx-auto mb-2 text-slate-300"></i> No history found.</td></tr>
+                                <tr v-for="t in histTasks" :key="t.task_id" class="hover:bg-slate-50">
+                                    <td class="px-5 py-3 font-mono text-xs text-slate-500 max-w-[180px] truncate" :title="t.task_id">{{ t.task_id }}</td>
+                                    <td class="px-5 py-3 font-medium text-slate-800">{{ t.action||'-' }}</td>
+                                    <td class="px-5 py-3">
+                                        <span :class="['px-2 py-0.5 text-xs font-semibold rounded-full', t.status==='completed'?'bg-emerald-100 text-emerald-800':t.status==='failed'?'bg-red-100 text-red-800':'bg-amber-100 text-amber-800']">{{ t.status }}</span>
+                                    </td>
+                                    <td class="px-5 py-3 text-center">
+                                        <span v-if="t.retries>0" class="inline-flex items-center justify-center w-6 h-6 rounded-full bg-orange-100 text-orange-700 text-xs font-bold">{{ t.retries }}</span>
+                                        <span v-else class="text-slate-300 text-xs">—</span>
+                                    </td>
+                                    <td class="px-5 py-3 text-right text-xs text-slate-600 font-mono">{{ t.duration_s!=null?t.duration_s.toFixed(3)+'s':'—' }}</td>
+                                    <td class="px-5 py-3 text-xs text-slate-500 whitespace-nowrap">{{ fmtTs(t.created_at) }}</td>
+                                    <td class="px-5 py-3 text-xs text-red-500 max-w-[160px] truncate" :title="t.fail_reason">{{ t.fail_reason||'' }}</td>
+                                </tr>
+                            </tbody>
+                        </table>
+                    </div>
                 </div>
 
-            </main>
-        </template>
-    </div>
+                <!-- ═══ Settings Tab ═══ -->
+                <div v-if="activeTab==='settings'" class="max-w-xl space-y-6">
+                    <div class="bg-white rounded-xl border border-slate-200 shadow-sm p-6">
+                        <h3 class="text-base font-semibold mb-1 flex items-center gap-2">
+                            <i data-lucide="calendar-range" class="w-5 h-5 text-indigo-500"></i> History Retention
+                        </h3>
+                        <p class="text-sm text-slate-500 mb-5">超过保留期的历史记录在下次写入时被懒清理。</p>
+                        <div class="flex items-center gap-4">
+                            <label class="text-sm font-medium text-slate-700 whitespace-nowrap">Keep History (days)</label>
+                            <input type="number" v-model.number="settingsForm.history_keep_days" min="1" max="365"
+                                class="w-24 px-3 py-2 border border-slate-200 rounded-lg text-sm text-center focus:ring-2 focus:ring-indigo-400 outline-none">
+                            <button @click="saveSettings" :disabled="loading.settings"
+                                class="px-5 py-2 bg-indigo-600 hover:bg-indigo-700 text-white text-sm font-medium rounded-lg transition disabled:opacity-50 flex items-center gap-2">
+                                <i v-if="loading.settings" data-lucide="loader-2" class="w-4 h-4 animate-spin"></i>
+                                <i v-else data-lucide="save" class="w-4 h-4"></i> Save
+                            </button>
+                        </div>
+                        <p class="mt-3 text-xs text-slate-400">
+                            当前值：<span class="font-bold text-indigo-600">{{ stats?.settings?.history_keep_days ?? settingsForm.history_keep_days }}</span> 天
+                        </p>
+                    </div>
+                    <div class="bg-white rounded-xl border border-slate-200 shadow-sm p-6">
+                        <h3 class="text-base font-semibold mb-3 flex items-center gap-2">
+                            <i data-lucide="terminal" class="w-5 h-5 text-slate-400"></i> CLI Commands
+                        </h3>
+                        <pre class="bg-slate-900 text-emerald-400 rounded-lg p-4 text-xs overflow-x-auto leading-6">qtask ns list
+qtask ns info &lt;namespace&gt;
+qtask ns purge &lt;namespace&gt; -f
 
-    <script>
-        const { createApp, ref, reactive, onMounted, onUnmounted, watch, nextTick } = Vue;
+qtask history &lt;ns&gt;:&lt;queue&gt; --status completed --days 7
+qtask settings show
+qtask settings set --keep-days 30</pre>
+                    </div>
+                </div>
 
-        createApp({
-            setup() {
-                // Auth States
-                const token = ref(localStorage.getItem('qtask_token') || '');
-                const loginForm = reactive({ username: 'admin', password: '' });
-                const loginError = ref('');
-                const loading = reactive({ login: false, stats: false, tasks: false, history: false, settings: false });
+            </div><!-- end scrollable -->
 
-                // Dashboard States
-                const stats = ref({ queues: {}, system: {}, storage: {}, settings: { history_keep_days: 15 } });
-                const activeTab = ref('overview'); // overview, queue, history, settings
-                const activeQueue = ref('');
+            <!-- Toast Logs -->
+            <div class="absolute bottom-6 right-6 z-50 flex flex-col-reverse gap-2 pointer-events-none">
+                <transition-group name="fade">
+                    <div v-for="log in opsLogs" :key="log.id"
+                        :class="['pointer-events-auto px-4 py-3 rounded-lg shadow-lg border text-sm max-w-sm flex items-start',
+                            log.type==='error'?'bg-red-50 text-red-800 border-red-200':'bg-slate-800 text-slate-100 border-slate-700']">
+                        <i v-if="log.type==='error'" data-lucide="alert-circle" class="w-5 h-5 mr-3 shrink-0 text-red-500"></i>
+                        <i v-else-if="log.type==='success'" data-lucide="check-circle-2" class="w-5 h-5 mr-3 shrink-0 text-emerald-400"></i>
+                        <i v-else data-lucide="info" class="w-5 h-5 mr-3 shrink-0 text-indigo-400"></i>
+                        <div><h4 class="font-bold text-xs uppercase mb-0.5">{{ log.title }}</h4><p class="opacity-90 leading-tight">{{ log.message }}</p></div>
+                    </div>
+                </transition-group>
+            </div>
 
-                // Task Explorer States (Stream view)
-                const tasks = ref([]);
-                const taskFilter = ref('failed');
+        </main>
+    </template>
+</div>
 
-                // History States
-                const histTasks = ref([]);
-                const histFilter = ref('all');
-                const histDays = ref(15);
-                const histLimit = ref(100);
-                const histCounts = ref({ pending: 0, completed: 0, failed: 0, total: 0 });
+<script>
+const { createApp, ref, reactive, computed, onMounted, onUnmounted, watch, nextTick } = Vue;
 
-                // Settings
-                const settingsForm = reactive({ history_keep_days: 15 });
+createApp({
+    setup() {
+        const token = ref(localStorage.getItem('qtask_token') || '');
+        const loginForm = reactive({ username: 'admin', password: '' });
+        const loginError = ref('');
+        const loading = reactive({ login: false, tasks: false, history: false, settings: false });
+        const stats = ref({ queues: {}, system: {}, storage: {}, settings: { history_keep_days: 15 }, namespaces: [] });
+        const activeTab = ref('overview');
+        const activeQueue = ref('');
+        const activeNs = ref('');
+        const selectedNamespace = ref('');  // '' = all
 
-                // Refresh
-                const isRefreshing = ref(true);
-                const refreshRate = ref(3);
-                let refreshTimer = null;
-                let healthTimer = null;
+        const tasks = ref([]);
+        const taskFilter = ref('failed');
+        const histTasks = ref([]);
+        const histFilter = ref('all');
+        const histDays = ref(15);
+        const histLimit = ref(100);
+        const histCounts = ref({ pending: 0, completed: 0, failed: 0, total: 0 });
+        const settingsForm = reactive({ history_keep_days: 15 });
 
-                // ─── Server Health ───
-                const serverHealth = reactive({
-                    online: true,    // optimistic default
-                    redisOk: true,
-                    redisMsg: '',
-                    failCount: 0,    // consecutive failures without a toast
-                    failMsg: '',
-                });
+        const isRefreshing = ref(true);
+        const refreshRate = ref(3);
+        let refreshTimer = null;
+        let healthTimer = null;
 
-                // Logs (declared before healthCheck so addLog is available)
-                const opsLogs = ref([]);
+        // ─── Server Health ───
+        const serverHealth = reactive({ online: true, redisOk: true, redisMsg: '', failCount: 0, failMsg: '' });
+        const opsLogs = ref([]);
 
-                const addLog = (type, title, message) => {
-                    const id = Date.now() + Math.random();
-                    opsLogs.value.unshift({ id, type, title, message });
-                    if (opsLogs.value.length > 5) opsLogs.value.pop();
-                    setTimeout(() => {
-                        const idx = opsLogs.value.findIndex(l => l.id === id);
-                        if (idx > -1) opsLogs.value.splice(idx, 1);
-                    }, 5000);
-                };
+        const addLog = (type, title, message) => {
+            const id = Date.now() + Math.random();
+            opsLogs.value.unshift({ id, type, title, message });
+            if (opsLogs.value.length > 5) opsLogs.value.pop();
+            setTimeout(() => { const i = opsLogs.value.findIndex(l => l.id === id); if (i > -1) opsLogs.value.splice(i, 1); }, 5000);
+        };
 
-                const healthCheck = async () => {
-                    try {
-                        const res = await fetch('/api/health', { signal: AbortSignal.timeout(5000) });
-                        if (!res.ok) throw new Error(`HTTP ${res.status}`);
-                        const data = await res.json();
-                        const wasOffline = !serverHealth.online;
-                        serverHealth.online = true;
-                        serverHealth.redisOk = data.redis === true;
-                        serverHealth.redisMsg = data.redis_msg || '';
-                        serverHealth.failMsg = '';
-                        if (wasOffline && serverHealth.failCount > 0) {
-                            // recovered — show one toast
-                            addLog('success', 'Server Recovered', 'Connection restored successfully.');
-                        }
-                        serverHealth.failCount = 0;
-                    } catch (e) {
-                        serverHealth.failCount++;
-                        serverHealth.failMsg = e.message || 'network error';
-                        if (serverHealth.failCount === 1) {
-                            // first failure only — then go silent
-                            addLog('error', 'Server Unreachable', serverHealth.failMsg);
-                        }
-                        serverHealth.online = false;
-                        serverHealth.redisOk = false;
-                    }
-                    setupLucide();
-                };
-
-
-
-                const setupLucide = () => {
-                    nextTick(() => { if (window.lucide) lucide.createIcons(); });
-                };
-
-                const fmtTs = (ts) => {
-                    if (!ts) return '-';
-                    const d = new Date(ts * 1000);
-                    const pad = n => String(n).padStart(2, '0');
-                    return `${d.getMonth()+1}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
-                };
-
-                const apiCall = async (endpoint, options = {}) => {
-                    if (!options.headers) options.headers = {};
-                    options.headers['Authorization'] = `Bearer ${token.value}`;
-                    const res = await fetch(endpoint, options);
-                    if (res.status === 401) { logout(); throw new Error('Unauthorized'); }
-                    if (!res.ok) {
-                        const err = await res.json().catch(() => ({}));
-                        throw new Error(err.detail || 'API request failed');
-                    }
-                    return await res.json();
-                };
-
-                const login = async () => {
-                    loading.login = true;
-                    loginError.value = '';
-                    try {
-                        const formData = new URLSearchParams();
-                        formData.append('username', loginForm.username);
-                        formData.append('password', loginForm.password);
-                        const res = await fetch('/api/login', {
-                            method: 'POST',
-                            headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-                            body: formData
-                        });
-                        if (!res.ok) throw new Error('Incorrect credentials');
-                        const data = await res.json();
-                        token.value = data.access_token;
-                        localStorage.setItem('qtask_token', data.access_token);
-                        addLog('success', 'Authentication', 'Logged in successfully');
-                        startPoller();
-                    } catch (e) {
-                        loginError.value = e.message;
-                    } finally {
-                        loading.login = false;
-                    }
-                };
-
-                const logout = () => {
-                    token.value = '';
-                    stopPoller();
-                    localStorage.removeItem('qtask_token');
-                    activeTab.value = 'overview';
-                };
-
-                const fetchStats = async () => {
-                    // skip polling fetches when server is known offline
-                    if (!serverHealth.online) return;
-                    try {
-                        const data = await apiCall('/api/stats');
-                        stats.value = data;
-                        if (data.settings?.history_keep_days) {
-                            histDays.value = data.settings.history_keep_days;
-                            settingsForm.history_keep_days = data.settings.history_keep_days;
-                        }
-                        setupLucide();
-                    } catch (e) {
-                        // 401 is handled in apiCall; other errors are already visible via health banner
-                        // do NOT spam a toast here — healthCheck() will catch unreachable server
-                    }
-                };
-
-                const fetchTasks = async () => {
-                    if (!activeQueue.value || !serverHealth.online) return;
-                    loading.tasks = true;
-                    try {
-                        const data = await apiCall(`/api/tasks/${activeQueue.value}?status=${taskFilter.value}&limit=100`);
-                        tasks.value = data.tasks || [];
-                        setupLucide();
-                    } catch (e) {
-                        // silent — server status visible in health banner
-                    } finally {
-                        loading.tasks = false;
-                    }
-                };
-
-                const fetchHistory = async () => {
-                    if (!activeQueue.value || !serverHealth.online) return;
-                    loading.history = true;
-                    try {
-                        const url = `/api/history/${activeQueue.value}?status=${histFilter.value}&limit=${histLimit.value}&days=${histDays.value}`;
-                        const data = await apiCall(url);
-                        histTasks.value = data.tasks || [];
-                        histCounts.value = data.counts || { pending: 0, completed: 0, failed: 0, total: 0 };
-                        setupLucide();
-                    } catch (e) {
-                        // silent
-                    } finally {
-                        loading.history = false;
-                    }
-                };
-
-                const fetchSettings = async () => {
-                    try {
-                        const data = await apiCall('/api/settings');
-                        settingsForm.history_keep_days = data.history_keep_days;
-                        histDays.value = data.history_keep_days;
-                    } catch (e) { /* ignore */ }
-                };
-
-                const saveSettings = async () => {
-                    loading.settings = true;
-                    try {
-                        const data = await apiCall('/api/settings', {
-                            method: 'POST',
-                            headers: { 'Content-Type': 'application/json' },
-                            body: JSON.stringify({ history_keep_days: settingsForm.history_keep_days })
-                        });
-                        histDays.value = data.history_keep_days;
-                        addLog('success', 'Settings Saved', `Keep days set to ${data.history_keep_days}`);
-                        fetchStats();
-                    } catch (e) {
-                        addLog('error', 'Save Failed', e.message);
-                    } finally {
-                        loading.settings = false;
-                        setupLucide();
-                    }
-                };
-
-                const requeueSingle = async (taskId) => {
-                    try {
-                        addLog('info', 'Requeue Started', `Moving task ${taskId} back to queue...`);
-                        const data = await apiCall(`/api/requeue/${activeQueue.value}`, {
-                            method: 'POST',
-                            headers: { 'Content-Type': 'application/json' },
-                            body: JSON.stringify({ task_id: taskId })
-                        });
-                        if (data.status === 'success') {
-                            addLog('success', 'Task Restored', `Successfully requeued message ${taskId}`);
-                            fetchTasks();
-                            fetchStats();
-                        }
-                    } catch (e) {
-                        addLog('error', 'Action Failed', e.message);
-                    }
-                };
-
-                const requeueAll = async () => {
-                    if (!confirm("Are you sure you want to blast all failed tasks back to the active queue?")) return;
-                    try {
-                        addLog('info', 'Bulk Requeue Started', 'Processing all dead letters...');
-                        const data = await apiCall(`/api/requeue/${activeQueue.value}`, { method: 'POST' });
-                        if (data.status === 'success') {
-                            addLog('success', 'Mass Restore Complete', `Successfully requeued ${data.requeued} messages!`);
-                            fetchTasks();
-                            fetchStats();
-                        } else {
-                            addLog('info', 'Nothing to do', data.message);
-                        }
-                    } catch (e) {
-                        addLog('error', 'Action Failed', e.message);
-                    }
-                };
-
-                const getAdminPassword = (actionName) => {
-                    return window.prompt(`[SECURITY] Type admin password to authorize '${actionName}':`) || null;
-                };
-
-                const resetGroupCmd = async () => {
-                    if (!confirm("Are you absolutely sure you want to drop all pending message backlog and reset the group cursor?")) return;
-                    const pwd = getAdminPassword("Reset Cursor");
-                    if (!pwd) return;
-                    try {
-                        const data = await apiCall(`/api/queues/${activeQueue.value}/reset`, {
-                            method: 'POST',
-                            headers: { 'Content-Type': 'application/json' },
-                            body: JSON.stringify({ password: pwd, group: "default_group" })
-                        });
-                        addLog('success', 'Group Reset', data.message);
-                        fetchStats();
-                        fetchTasks();
-                    } catch (e) {
-                        addLog('error', 'Reset Rejected', e.message);
-                    }
-                };
-
-                const clearQueueCmd = async () => {
-                    if (!confirm("DANGER: This action is irreversible. It will wipe all items in the primary queue and its dead-letter-queue. Continue?")) return;
-                    const pwd = getAdminPassword("Wipe Storage Queue");
-                    if (!pwd) return;
-                    try {
-                        const data = await apiCall(`/api/queues/${activeQueue.value}/clear`, {
-                            method: 'POST',
-                            headers: { 'Content-Type': 'application/json' },
-                            body: JSON.stringify({ password: pwd })
-                        });
-                        addLog('success', 'Purge Successful', data.message);
-                        switchTab('overview');
-                    } catch (e) {
-                        addLog('error', 'Purge Rejected', e.message);
-                    }
-                };
-
-                const openQueueDetail = (qname) => {
-                    activeQueue.value = qname;
-                    activeTab.value = 'queue';
-                    taskFilter.value = 'failed';
-                    fetchTasks();
-                };
-
-                const switchTab = (tab) => {
-                    activeTab.value = tab;
-                    if (tab === 'overview') {
-                        activeQueue.value = null;
-                        fetchStats();
-                    } else if (tab === 'history') {
-                        fetchHistory();
-                    } else if (tab === 'settings') {
-                        fetchSettings();
-                    }
-                    setupLucide();
-                };
-
-                const tick = () => {
-                    if (isRefreshing.value && token.value) {
-                        fetchStats();
-                        if (activeTab.value === 'queue') fetchTasks();
-                        if (activeTab.value === 'history') fetchHistory();
-                    }
-                };
-
-                const startPoller = () => {
-                    stopPoller();
-                    if (token.value) {
-                        // health check runs independently at a fixed 10s interval
-                        healthCheck();
-                        healthTimer = setInterval(healthCheck, 10000);
-                        tick();
-                        refreshTimer = setInterval(tick, refreshRate.value * 1000);
-                    }
-                };
-
-                const stopPoller = () => {
-                    if (refreshTimer) clearInterval(refreshTimer);
-                    if (healthTimer) clearInterval(healthTimer);
-                };
-
-                const toggleRefresh = () => {
-                    isRefreshing.value = !isRefreshing.value;
-                };
-
-                watch(refreshRate, () => {
-                    if (isRefreshing.value) startPoller();
-                });
-
-                onMounted(() => {
-                    setupLucide();
-                    if (token.value) startPoller();
-                });
-
-                onUnmounted(() => {
-                    stopPoller();
-                });
-
-                return {
-                    token, loginForm, loginError, loading, login, logout,
-                    stats, activeTab, activeQueue, switchTab, openQueueDetail,
-                    tasks, taskFilter, fetchTasks, requeueSingle, requeueAll,
-                    histTasks, histFilter, histDays, histLimit, histCounts, fetchHistory, fmtTs,
-                    settingsForm, saveSettings,
-                    isRefreshing, refreshRate, toggleRefresh, opsLogs,
-                    resetGroupCmd, clearQueueCmd,
-                    serverHealth,
-                };
+        const healthCheck = async () => {
+            try {
+                const res = await fetch('/api/health', { signal: AbortSignal.timeout(5000) });
+                if (!res.ok) throw new Error(`HTTP ${res.status}`);
+                const data = await res.json();
+                const wasOffline = !serverHealth.online;
+                serverHealth.online = true;
+                serverHealth.redisOk = data.redis === true;
+                serverHealth.redisMsg = data.redis_msg || '';
+                serverHealth.failMsg = '';
+                if (wasOffline && serverHealth.failCount > 0) addLog('success', 'Server Recovered', 'Connection restored.');
+                serverHealth.failCount = 0;
+            } catch (e) {
+                serverHealth.failCount++;
+                serverHealth.failMsg = e.message || 'network error';
+                if (serverHealth.failCount === 1) addLog('error', 'Server Unreachable', serverHealth.failMsg);
+                serverHealth.online = false;
+                serverHealth.redisOk = false;
             }
-        }).mount('#app');
-    </script>
-</body>
+            setupLucide();
+        };
 
+        const setupLucide = () => nextTick(() => { if (window.lucide) lucide.createIcons(); });
+        const fmtTs = (ts) => { if (!ts) return '-'; const d = new Date(ts*1000); const p = n=>String(n).padStart(2,'0'); return `${d.getMonth()+1}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`; };
+
+        const apiCall = async (endpoint, options = {}) => {
+            if (!options.headers) options.headers = {};
+            options.headers['Authorization'] = `Bearer ${token.value}`;
+            const res = await fetch(endpoint, options);
+            if (res.status === 401) { logout(); throw new Error('Unauthorized'); }
+            if (!res.ok) { const err = await res.json().catch(() => ({})); throw new Error(err.detail || 'API error'); }
+            return await res.json();
+        };
+
+        const login = async () => {
+            loading.login = true; loginError.value = '';
+            try {
+                const formData = new URLSearchParams();
+                formData.append('username', loginForm.username);
+                formData.append('password', loginForm.password);
+                const res = await fetch('/api/login', { method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, body: formData });
+                if (!res.ok) throw new Error('Incorrect credentials');
+                const data = await res.json();
+                token.value = data.access_token;
+                localStorage.setItem('qtask_token', data.access_token);
+                addLog('success', 'Authentication', 'Logged in successfully');
+                startPoller();
+            } catch (e) { loginError.value = e.message; }
+            finally { loading.login = false; }
+        };
+
+        const logout = () => { token.value = ''; stopPoller(); localStorage.removeItem('qtask_token'); activeTab.value = 'overview'; };
+
+        // ─── Namespace helpers ───
+        const filteredQueues = computed(() => {
+            const qs = Object.entries(stats.value.queues || {});
+            if (!selectedNamespace.value) return qs;
+            return qs.filter(([, info]) => info.namespace === selectedNamespace.value);
+        });
+
+        const nsQueueCount = (ns) => filteredQueues.value.filter(([, i]) => i.namespace === ns).length;
+
+        /** namespace 下所有队列的 history_counts 聚合 */
+        const nsAgg = (ns) => {
+            const agg = { completed: 0, pending: 0, failed: 0 };
+            for (const [, info] of Object.entries(stats.value.queues || {})) {
+                if (info.namespace !== ns) continue;
+                const c = info.history_counts || {};
+                for (const k of ['completed', 'pending', 'failed']) agg[k] += c[k] || 0;
+            }
+            return agg;
+        };
+
+        /** 在 sidebar/topbar 显示的队列简短名（去掉 ns 前缀和 :stream 后缀） */
+        const displayQueueName = (qname, ns) => {
+            let n = qname.replace(/:stream$/, '');
+            if (ns && n.startsWith(`${ns}:`)) n = n.slice(ns.length + 1);
+            return n;
+        };
+
+        const selectNamespace = (ns) => { selectedNamespace.value = ns; switchTab('overview'); };
+
+        const showNsPurge = async (ns) => {
+            if (!confirm(`DANGER: Permanently delete ALL data in namespace "${ns}"?\n(Streams, DLQ, history, registration metadata)`)) return;
+            const pwd = window.prompt(`Admin password to purge namespace "${ns}":`) || null;
+            if (!pwd) return;
+            try {
+                const data = await apiCall(`/api/namespaces/${ns}`, {
+                    method: 'DELETE',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ password: pwd }),
+                });
+                addLog('success', 'Namespace Purged', `"${ns}" deleted: ${JSON.stringify(data.deleted)}`);
+                fetchStats();
+            } catch (e) { addLog('error', 'Purge Failed', e.message); }
+        };
+
+        // ─── Data Fetching ───
+        const fetchStats = async () => {
+            if (!serverHealth.online) return;
+            try {
+                const data = await apiCall('/api/stats');
+                stats.value = data;
+                if (data.settings?.history_keep_days) { histDays.value = data.settings.history_keep_days; settingsForm.history_keep_days = data.settings.history_keep_days; }
+                setupLucide();
+            } catch (e) { /* silent — health banner shows status */ }
+        };
+
+        const fetchTasks = async () => {
+            if (!activeQueue.value || !serverHealth.online) return;
+            loading.tasks = true;
+            try { const data = await apiCall(`/api/tasks/${activeQueue.value}?status=${taskFilter.value}&limit=100`); tasks.value = data.tasks||[]; setupLucide(); }
+            catch (e) { /* silent */ }
+            finally { loading.tasks = false; }
+        };
+
+        const fetchHistory = async () => {
+            if (!activeQueue.value || !serverHealth.online) return;
+            loading.history = true;
+            try {
+                const data = await apiCall(`/api/history/${activeQueue.value}?status=${histFilter.value}&limit=${histLimit.value}&days=${histDays.value}`);
+                histTasks.value = data.tasks||[];
+                histCounts.value = data.counts||{ pending:0, completed:0, failed:0, total:0 };
+                setupLucide();
+            } catch (e) { /* silent */ }
+            finally { loading.history = false; }
+        };
+
+        const fetchSettings = async () => {
+            try { const data = await apiCall('/api/settings'); settingsForm.history_keep_days = data.history_keep_days; histDays.value = data.history_keep_days; } catch (e) {}
+        };
+
+        const saveSettings = async () => {
+            loading.settings = true;
+            try {
+                const data = await apiCall('/api/settings', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ history_keep_days: settingsForm.history_keep_days }) });
+                histDays.value = data.history_keep_days;
+                addLog('success', 'Settings Saved', `Keep days set to ${data.history_keep_days}`);
+                fetchStats();
+            } catch (e) { addLog('error', 'Save Failed', e.message); }
+            finally { loading.settings = false; setupLucide(); }
+        };
+
+        const requeueSingle = async (taskId) => {
+            try {
+                addLog('info', 'Requeue Started', `Moving task ${taskId} back to queue…`);
+                const data = await apiCall(`/api/requeue/${activeQueue.value}`, { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ task_id: taskId }) });
+                if (data.status==='success') { addLog('success', 'Task Restored', `Requeued ${taskId}`); fetchTasks(); fetchStats(); }
+            } catch (e) { addLog('error', 'Action Failed', e.message); }
+        };
+
+        const requeueAll = async () => {
+            if (!confirm('Requeue all failed tasks back to active queue?')) return;
+            try {
+                const data = await apiCall(`/api/requeue/${activeQueue.value}`, { method: 'POST' });
+                if (data.status==='success') { addLog('success', 'Mass Restore', `Requeued ${data.requeued} messages!`); fetchTasks(); fetchStats(); }
+                else addLog('info', 'Nothing to do', data.message);
+            } catch (e) { addLog('error', 'Action Failed', e.message); }
+        };
+
+        const resetGroupCmd = async () => {
+            if (!confirm('Reset group cursor? Backlogged messages will be ignored.')) return;
+            const pwd = window.prompt('Admin password to Reset Cursor:') || null;
+            if (!pwd) return;
+            try { const data = await apiCall(`/api/queues/${activeQueue.value}/reset`, { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ password: pwd, group: 'default_group' }) }); addLog('success', 'Group Reset', data.message); fetchStats(); fetchTasks(); }
+            catch (e) { addLog('error', 'Reset Rejected', e.message); }
+        };
+
+        const clearQueueCmd = async () => {
+            if (!confirm('DANGER: Wipe all items in queue and DLQ?')) return;
+            const pwd = window.prompt('Admin password to Wipe Queue:') || null;
+            if (!pwd) return;
+            try { const data = await apiCall(`/api/queues/${activeQueue.value}/clear`, { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ password: pwd }) }); addLog('success', 'Purge Successful', data.message); switchTab('overview'); }
+            catch (e) { addLog('error', 'Purge Rejected', e.message); }
+        };
+
+        const openQueueDetail = (qname) => { activeQueue.value = qname; activeTab.value = 'queue'; taskFilter.value = 'failed'; fetchTasks(); };
+
+        const switchTab = (tab) => {
+            activeTab.value = tab;
+            if (tab==='overview') fetchStats();
+            else if (tab==='history') fetchHistory();
+            else if (tab==='settings') fetchSettings();
+            setupLucide();
+        };
+
+        const tick = () => {
+            if (isRefreshing.value && token.value) {
+                fetchStats();
+                if (activeTab.value==='queue') fetchTasks();
+                if (activeTab.value==='history') fetchHistory();
+            }
+        };
+
+        const startPoller = () => {
+            stopPoller();
+            if (token.value) {
+                healthCheck();
+                healthTimer = setInterval(healthCheck, 10000);
+                tick();
+                refreshTimer = setInterval(tick, refreshRate.value * 1000);
+            }
+        };
+
+        const stopPoller = () => { if (refreshTimer) clearInterval(refreshTimer); if (healthTimer) clearInterval(healthTimer); };
+        const toggleRefresh = () => { isRefreshing.value = !isRefreshing.value; };
+        watch(refreshRate, () => { if (isRefreshing.value) startPoller(); });
+        onMounted(() => { setupLucide(); if (token.value) startPoller(); });
+        onUnmounted(() => stopPoller());
+
+        return {
+            token, loginForm, loginError, loading, login, logout,
+            stats, activeTab, activeQueue, activeNs, selectedNamespace, switchTab, openQueueDetail,
+            tasks, taskFilter, fetchTasks, requeueSingle, requeueAll,
+            histTasks, histFilter, histDays, histLimit, histCounts, fetchHistory, fmtTs,
+            settingsForm, saveSettings,
+            isRefreshing, refreshRate, toggleRefresh, opsLogs,
+            resetGroupCmd, clearQueueCmd,
+            serverHealth, healthCheck,
+            filteredQueues, nsQueueCount, nsAgg, displayQueueName, selectNamespace, showNsPurge,
+        };
+    }
+}).mount('#app');
+</script>
+</body>
 </html>

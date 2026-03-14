@@ -6,39 +6,74 @@ from typing import Tuple, Dict, Any, Optional
 from .storage import RemoteStorage
 from .history import TaskHistoryStore
 
+# Redis keys for namespace registry
+_NS_SET_KEY = "qtask:namespaces"          # Set of all namespace names
+_NS_QUEUES_KEY = "qtask:ns:{ns}:queues"  # Set of queue base-names in a namespace
+
+
 class SmartQueue:
-    """基于 Redis Stream 支持大对象自动卸载和 ACK 机制的队列"""
-    
+    """基于 Redis Stream 支持大对象自动卸载和 ACK 机制的队列
+
+    namespace 参数：
+        用于项目级分组（任务所属的命名空间）。指定后队列的 Redis Key 会以
+        {namespace}: 为前缀，例如 namespace="proj_a", queue_name="spider:tasks"
+        → Redis key: proj_a:spider:tasks:stream
+        方便按项目统一查看和清除所有相关数据。
+        可在多台主机的多个 Worker 上使用同一 namespace，worker_id/worker_group
+        仍用于区分不同的 Worker 节点进程。
+    """
+
     def __init__(
-        self, 
-        redis_url: str, 
-        queue_name: str, 
-        worker_group: str = "default_group",
-        worker_id: str = "default_worker", 
+        self,
+        redis_url: str,
+        queue_name: str,
+        worker_group: str = None,          # None 时按 namespace 自动生成
+        worker_id: str = "default_worker",
         storage: Optional[RemoteStorage] = None,
-        large_threshold_bytes: int = 1024 * 50,  # 默认 >50KB 存远程
+        large_threshold_bytes: int = 1024 * 50,
         auto_claim: bool = True,
-        claim_interval: int = 300,  # 自动认领检查的最小间隔(秒)
+        claim_interval: int = 300,
         history: Optional[TaskHistoryStore] = None,
+        namespace: str = None,             # 项目/任务级命名空间
     ):
         self.redis = redis.from_url(redis_url, decode_responses=True)
-        self.queue_name = f"{queue_name}:stream"
-        self._base_name = queue_name
+        self.namespace = namespace or ""
+        self._base_queue_name = queue_name  # 原始队列名（不含 ns 前缀）
+
+        # 实际 Redis key 前缀
+        _prefixed = f"{self.namespace}:{queue_name}" if self.namespace else queue_name
+        self.queue_name = f"{_prefixed}:stream"
+        self._base_name = _prefixed         # 用于构造 DLQ 等
+        self.dlq = f"{_prefixed}:stream_dlq"
+
+        # worker_group 默认值：有 namespace 时用 {ns}_group，否则 default_group
+        if worker_group is None:
+            worker_group = f"{self.namespace}_group" if self.namespace else "default_group"
         self.worker_group = worker_group
         self.worker_id = worker_id
-        self.dlq = f"{queue_name}:stream_dlq"
-        
+
         self.storage = storage
         self.large_threshold_bytes = large_threshold_bytes
         self.auto_claim = auto_claim
         self.claim_interval = claim_interval
         self._last_claim_check = 0
-        
-        # 任务历史记录（可选注入）
+
         self.history = history
-        
-        # 确保消费组存在
+
         self._ensure_consumer_group()
+        # 注册 namespace 元数据（非阻塞失败不影响主流程）
+        if self.namespace:
+            self._register_namespace()
+
+    def _register_namespace(self):
+        """在 Redis 中注册 namespace 和队列的映射关系"""
+        try:
+            pipe = self.redis.pipeline()
+            pipe.sadd(_NS_SET_KEY, self.namespace)
+            pipe.sadd(_NS_QUEUES_KEY.format(ns=self.namespace), self._base_queue_name)
+            pipe.execute()
+        except Exception as e:
+            logger.warning(f"Namespace registration failed (non-critical): {e}")
 
     def _ensure_consumer_group(self):
         try:
@@ -51,23 +86,21 @@ class SmartQueue:
         """入队：自动评估体积，拦截大对象，推入 Stream，返回 msg_id"""
         data_bytes = json.dumps(payload, ensure_ascii=False).encode('utf-8')
         data_len = len(data_bytes)
-        
+
         if self.storage and data_len > self.large_threshold_bytes:
             storage_key = self.storage.save_bytes(data_bytes)
-            logger.info(f"Intercepted large payload ({data_len / 1024:.2f} KB). Offloaded to storage with key: {storage_key}.")
+            logger.info(f"Intercepted large payload ({data_len / 1024:.2f} KB). Offloaded to storage key: {storage_key}.")
             msg = json.dumps({"_qtask_large_payload": True, "storage_key": storage_key})
         else:
             msg = data_bytes.decode('utf-8')
-            
+
         msg_id = self.redis.xadd(self.queue_name, {"payload": msg})
 
-        # 记录历史
         if self.history:
             try:
                 action = payload.get("action", "unknown")
                 preview = json.dumps(payload, ensure_ascii=False)
                 self.history.record_push(msg_id, action, preview)
-                # 懒清理：每次 push 触发一次过期清理（Redis 操作轻量）
                 self.history.cleanup_old()
             except Exception as e:
                 logger.warning(f"History record_push failed (non-critical): {e}")
@@ -75,7 +108,7 @@ class SmartQueue:
         return msg_id
 
     def pop_blocking(self, timeout: int = 0) -> Tuple[Optional[Dict[str, Any]], Optional[Dict[str, str]]]:
-        """出队：使用消费组拉取数据，如果在 auto_claim 且到达检查时间则做一次抢占"""
+        """出队：使用消费组拉取数据"""
         if self.auto_claim:
             now = time.time()
             if now - self._last_claim_check >= self.claim_interval:
@@ -83,10 +116,8 @@ class SmartQueue:
                 claimed_msg = self._claim_pending_msgs()
                 if claimed_msg:
                     return self._process_raw_msg(claimed_msg[0], claimed_msg[1])
-            
-        # 设置 block=timeout_ms (timeout 转换为毫秒)
+
         block_ms = timeout * 1000 if timeout > 0 else 0
-        
         streams = {self.queue_name: ">"}
         try:
             messages = self.redis.xreadgroup(
@@ -98,47 +129,41 @@ class SmartQueue:
                 self._ensure_consumer_group()
                 return self.pop_blocking(timeout)
             raise
-        
+
         if not messages:
             return None, None
-            
+
         stream_name, stream_msgs = messages[0]
         if not stream_msgs:
             return None, None
-            
+
         msg_id, msg_data = stream_msgs[0]
         raw_payload = msg_data.get("payload")
-        
         return self._process_raw_msg(msg_id, raw_payload)
-        
+
     def _claim_pending_msgs(self, idle_time_ms: int = 300000) -> Optional[Tuple[str, str]]:
-        """认领超过 idle_time_ms (默认5分钟) 未处理的死节点任务"""
         pending_info = self.redis.xpending_range(
             self.queue_name, self.worker_group, min="-", max="+", count=1
         )
         if not pending_info:
             return None
-            
+
         first_pending = pending_info[0]
         if first_pending['time_since_delivered'] > idle_time_ms:
-            # 尝试认领
             msg_id = first_pending['message_id']
             claimed = self.redis.xclaim(
                 self.queue_name, self.worker_group, self.worker_id, idle_time_ms, [msg_id]
             )
             if claimed:
-                # 认领时记录重试
                 if self.history:
                     try:
                         self.history.record_retry(msg_id)
                     except Exception:
                         pass
                 return claimed[0][0], claimed[0][1].get("payload")
-        
         return None
 
     def claim_all(self, idle_time_ms: int = 300000) -> int:
-        """管理员命令：一次性大批量认领所有超时的遗留节点任务"""
         count = 0
         while True:
             pending_info = self.redis.xpending_range(
@@ -146,19 +171,14 @@ class SmartQueue:
             )
             if not pending_info:
                 break
-                
-            claimed_ids = []
-            for p in pending_info:
-                if p['time_since_delivered'] > idle_time_ms:
-                    claimed_ids.append(p['message_id'])
-                    
+
+            claimed_ids = [p['message_id'] for p in pending_info if p['time_since_delivered'] > idle_time_ms]
             if not claimed_ids:
                 break
-                
+
             claimed = self.redis.xclaim(
                 self.queue_name, self.worker_group, self.worker_id, idle_time_ms, claimed_ids
             )
-            # 批量记录重试
             if self.history:
                 for c in claimed:
                     try:
@@ -166,13 +186,11 @@ class SmartQueue:
                     except Exception:
                         pass
             count += len(claimed)
-            
             if len(pending_info) < 100:
                 break
         return count
 
     def reset_group(self):
-        """管理员命令：将消费组游标重置为最新$，丢弃堆积未读"""
         try:
             self.redis.xgroup_setid(self.queue_name, self.worker_group, id="$")
             return True
@@ -181,12 +199,9 @@ class SmartQueue:
             return False
 
     def clear_all(self):
-        """管理员命令：排空主 Stream 和 DLQ 内所有数据 (保留组定义)"""
         try:
-            # XTRIM MAXLEN 0 可以清空内容但保留 Stream 结构与 Groups
             self.redis.xtrim(self.queue_name, maxlen=0)
             self.redis.xtrim(self.dlq, maxlen=0)
-            # 还是跑一下 ensure 确保万一没流时能创建好
             self._ensure_consumer_group()
             return True
         except Exception as e:
@@ -199,10 +214,9 @@ class SmartQueue:
             parsed = json.loads(raw_payload)
             if isinstance(parsed, dict) and parsed.get("_qtask_large_payload"):
                 if not self.storage:
-                    logger.error("Detected large payload but RemoteStorage is not assigned.")
                     raise ValueError("检测到大对象，但未配置 Storage")
                 real_data_str = self.storage.load(parsed["storage_key"])
-                logger.info(f"[{msg_id}] Loaded large payload from remote storage successfully.")
+                logger.info(f"[{msg_id}] Loaded large payload from remote storage.")
                 return json.loads(real_data_str), msg_context
             return parsed, msg_context
         except Exception as e:
@@ -211,12 +225,10 @@ class SmartQueue:
             return None, None
 
     def ack(self, msg_context: Dict[str, str]):
-        """确认成功：ACK 消息，并清理关联的远程文件"""
         msg_id = msg_context["msg_id"]
         raw_payload = msg_context["raw_payload"]
         pop_ts = msg_context.get("_pop_ts", time.time())
-        
-        # 确认消息
+
         try:
             self.redis.xack(self.queue_name, self.worker_group, msg_id)
         except redis.exceptions.ResponseError as e:
@@ -225,8 +237,7 @@ class SmartQueue:
                 self.redis.xack(self.queue_name, self.worker_group, msg_id)
             else:
                 raise
-        
-        # 清除大对象文件
+
         try:
             parsed = json.loads(raw_payload)
             if isinstance(parsed, dict) and parsed.get("_qtask_large_payload") and self.storage:
@@ -234,37 +245,89 @@ class SmartQueue:
         except Exception:
             pass
 
-        # 记录历史
         if self.history:
             try:
-                duration = time.time() - pop_ts
-                self.history.record_ack(msg_id, duration)
+                self.history.record_ack(msg_id, time.time() - pop_ts)
             except Exception as e:
                 logger.warning(f"History record_ack failed (non-critical): {e}")
 
     def fail(self, msg_context: Dict[str, str], reason: str = ""):
-        """确认失败：移入死信队列并 ACK 原消息，以防止循环消费"""
         self._move_to_dlq(msg_context, reason=reason)
 
     def _move_to_dlq(self, msg_context: Dict[str, str], reason: str = ""):
         msg_id = msg_context.get("msg_id")
         raw_payload = msg_context.get("raw_payload")
-        
         if not msg_id:
             return
-
         try:
-            # 将失败消息投递到死信 Stream
             self.redis.xadd(self.dlq, {"payload": raw_payload, "original_id": msg_id})
-            # ACK 移出待处理列表，防止陷入死循环重试
             self.redis.xack(self.queue_name, self.worker_group, msg_id)
         except Exception as e:
             logger.error(f"Failed to move message {msg_id} to DLQ: {e}")
 
-        # 记录历史
         if self.history:
             try:
                 self.history.record_retry(msg_id)
                 self.history.record_fail(msg_id, reason or "moved to DLQ")
             except Exception as e:
                 logger.warning(f"History record_fail failed (non-critical): {e}")
+
+    @staticmethod
+    def list_namespaces(redis_client) -> list:
+        """列出 Redis 中注册的所有 namespace"""
+        try:
+            return sorted(redis_client.smembers(_NS_SET_KEY))
+        except Exception:
+            return []
+
+    @staticmethod
+    def get_namespace_queues(redis_client, namespace: str) -> list:
+        """获取某 namespace 下注册的所有队列名（不含前缀）"""
+        try:
+            return sorted(redis_client.smembers(_NS_QUEUES_KEY.format(ns=namespace)))
+        except Exception:
+            return []
+
+    @staticmethod
+    def purge_namespace(redis_client, namespace: str) -> Dict[str, int]:
+        """
+        危险操作：清除 namespace 下所有数据
+        包括：所有 Stream、DLQ、历史 Hash、历史 SortedSet、注册元数据
+        返回被删除的 key 数量统计
+        """
+        deleted = {"stream_keys": 0, "history_keys": 0, "meta_keys": 0}
+        try:
+            # 删除 {ns}:* 的 Stream 相关 key
+            pattern = f"{namespace}:*"
+            cursor = 0
+            stream_keys = []
+            while True:
+                cursor, keys = redis_client.scan(cursor, match=pattern, count=200)
+                stream_keys.extend(keys)
+                if cursor == 0:
+                    break
+            if stream_keys:
+                redis_client.delete(*stream_keys)
+                deleted["stream_keys"] = len(stream_keys)
+
+            # 删除历史记录 key
+            hist_pattern = f"qtask:hist:{namespace}:*"
+            cursor = 0
+            hist_keys = []
+            while True:
+                cursor, keys = redis_client.scan(cursor, match=hist_pattern, count=200)
+                hist_keys.extend(keys)
+                if cursor == 0:
+                    break
+            if hist_keys:
+                redis_client.delete(*hist_keys)
+                deleted["history_keys"] = len(hist_keys)
+
+            # 删除 namespace 元数据
+            redis_client.delete(_NS_QUEUES_KEY.format(ns=namespace))
+            redis_client.srem(_NS_SET_KEY, namespace)
+            deleted["meta_keys"] = 1
+
+        except Exception as e:
+            logger.error(f"purge_namespace failed: {e}")
+        return deleted
