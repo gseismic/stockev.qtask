@@ -219,8 +219,8 @@ def clear_queue(queue_name: str, req: QueueAdminRequest):
         raise HTTPException(status_code=403, detail="Invalid admin password provided for decisive action.")
     from qtask.queue import SmartQueue
     q = SmartQueue(REDIS_URL, queue_name.replace(":stream", ""))
-    if q.clear_all():
-        return {"status": "success", "message": f"Queue {queue_name} has been cleared"}
+    if q.clear_all(clear_history=True):
+        return {"status": "success", "message": f"Queue {queue_name} and its history have been cleared"}
     raise HTTPException(status_code=500, detail="Failed to clear queue")
 
 
