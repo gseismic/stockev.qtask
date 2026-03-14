@@ -22,7 +22,6 @@ q = SmartQueue(
     "spider:tasks",             # 实际 key: stockev:spider:tasks:stream
     namespace=NAMESPACE,
     storage=storage,
-    history_store=True,
 )
 
 for symbol in ["AAPL", "MSFT", "TSLA"]:

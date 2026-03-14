@@ -35,7 +35,7 @@ class SmartQueue:
         claim_interval: int = 300,
         history: Optional[TaskHistoryStore] = None,
         namespace: str = None,             # 项目/任务级命名空间
-        history_store: bool = False,       # 快捷开启历史记录
+        history_store: bool = True,        # 默认自动开启历史记录
     ):
         self.redis = redis.from_url(redis_url, decode_responses=True)
         self.namespace = namespace or ""

@@ -65,6 +65,7 @@ class Worker:
             claim_interval=claim_interval,
             namespace=namespace,
             history=None,  # 先建队列让 ns 前缀生效，再用实际名创建 history
+            history_store=False, # 防止默认开启创建重复的实体
         )
         # 用加过 ns 前缀的实际基础名（不含 :stream）创建 history
         self.listen_q.history = _make_history(self.listen_q._base_name)
@@ -79,6 +80,7 @@ class Worker:
                 claim_interval=claim_interval,
                 namespace=namespace,
                 history=None,
+                history_store=False,
             )
             self.result_q.history = _make_history(self.result_q._base_name)
         else:
