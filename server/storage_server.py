@@ -116,6 +116,35 @@ def requeue_dlq(queue_name: str, req: RequeueRequest = None):
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
+class QueueAdminRequest(BaseModel):
+    password: str
+    group: Optional[str] = "default_group"
+
+@app.post("/api/queues/{queue_name}/clear", dependencies=[Depends(get_current_username)])
+def clear_queue(queue_name: str, req: QueueAdminRequest):
+    """危险：彻底清空某个队列及其死信"""
+    if req.password != ADMIN_PASSWORD:
+        raise HTTPException(status_code=403, detail="Invalid admin password provided for decisive action.")
+    
+    from qtask.queue import SmartQueue
+    # 构造 SmartQueue 需要真实的 Redis URL
+    q = SmartQueue(REDIS_URL, queue_name.replace(":stream", ""))
+    if q.clear_all():
+        return {"status": "success", "message": f"Queue {queue_name} has been cleared"}
+    raise HTTPException(status_code=500, detail="Failed to clear queue")
+
+@app.post("/api/queues/{queue_name}/reset", dependencies=[Depends(get_current_username)])
+def reset_group(queue_name: str, req: QueueAdminRequest):
+    """危险：重置消费组游标（放弃积压）"""
+    if req.password != ADMIN_PASSWORD:
+        raise HTTPException(status_code=403, detail="Invalid admin password provided for decisive action.")
+    
+    from qtask.queue import SmartQueue
+    q = SmartQueue(REDIS_URL, queue_name.replace(":stream", ""), worker_group=req.group)
+    if q.reset_group():
+        return {"status": "success", "message": f"Cursor for group {req.group} reset"}
+    raise HTTPException(status_code=500, detail="Failed to reset group cursor")
+
 @app.get("/api/tasks/{queue_name}", dependencies=[Depends(get_current_username)])
 def get_task_details(queue_name: str, status: str = "all", limit: int = 50):
     """获取具体队列的任务明细列表"""

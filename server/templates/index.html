@@ -1,5 +1,6 @@
 <!DOCTYPE html>
 <html lang="zh-CN">
+
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
@@ -9,17 +10,40 @@
     <!-- Lucide Icons -->
     <script src="https://unpkg.com/lucide@latest"></script>
     <style>
-        .fade-enter-active, .fade-leave-active { transition: opacity 0.3s ease; }
-        .fade-enter-from, .fade-leave-to { opacity: 0; }
-        ::-webkit-scrollbar { width: 6px; height: 6px; }
-        ::-webkit-scrollbar-track { background: #f1f1f1; border-radius: 4px; }
-        ::-webkit-scrollbar-thumb { background: #c1c1c1; border-radius: 4px; }
-        ::-webkit-scrollbar-thumb:hover { background: #a8a8a8; }
+        .fade-enter-active,
+        .fade-leave-active {
+            transition: opacity 0.3s ease;
+        }
+
+        .fade-enter-from,
+        .fade-leave-to {
+            opacity: 0;
+        }
+
+        ::-webkit-scrollbar {
+            width: 6px;
+            height: 6px;
+        }
+
+        ::-webkit-scrollbar-track {
+            background: #f1f1f1;
+            border-radius: 4px;
+        }
+
+        ::-webkit-scrollbar-thumb {
+            background: #c1c1c1;
+            border-radius: 4px;
+        }
+
+        ::-webkit-scrollbar-thumb:hover {
+            background: #a8a8a8;
+        }
     </style>
 </head>
+
 <body class="bg-gray-50 text-slate-800 font-sans h-screen overflow-hidden flex">
     <div id="app" class="w-full h-full flex" v-cloak>
-        
+
         <!-- Login Form -->
         <div v-if="!token" class="fixed inset-0 bg-slate-900 flex items-center justify-center z-50">
             <div class="bg-white p-8 rounded-xl shadow-2xl w-full max-w-md">
@@ -30,14 +54,19 @@
                 <form @submit.prevent="login" class="space-y-6">
                     <div>
                         <label class="block text-sm font-medium text-slate-700">Username</label>
-                        <input v-model="loginForm.username" type="text" required class="mt-1 block w-full px-4 py-2 bg-slate-50 border border-slate-200 rounded-lg focus:ring-2 focus:ring-indigo-500 outline-none transition" placeholder="admin">
+                        <input v-model="loginForm.username" type="text" required
+                            class="mt-1 block w-full px-4 py-2 bg-slate-50 border border-slate-200 rounded-lg focus:ring-2 focus:ring-indigo-500 outline-none transition"
+                            placeholder="admin">
                     </div>
                     <div>
                         <label class="block text-sm font-medium text-slate-700">Password</label>
-                        <input v-model="loginForm.password" type="password" required class="mt-1 block w-full px-4 py-2 bg-slate-50 border border-slate-200 rounded-lg focus:ring-2 focus:ring-indigo-500 outline-none transition" placeholder="••••••••">
+                        <input v-model="loginForm.password" type="password" required
+                            class="mt-1 block w-full px-4 py-2 bg-slate-50 border border-slate-200 rounded-lg focus:ring-2 focus:ring-indigo-500 outline-none transition"
+                            placeholder="••••••••">
                     </div>
                     <div v-if="loginError" class="text-red-500 text-sm font-medium">{{ loginError }}</div>
-                    <button type="submit" :disabled="loading.login" class="w-full flex justify-center py-2.5 px-4 rounded-lg shadow-sm text-sm font-medium text-white bg-indigo-600 hover:bg-indigo-700 focus:outline-none transition disabled:opacity-50">
+                    <button type="submit" :disabled="loading.login"
+                        class="w-full flex justify-center py-2.5 px-4 rounded-lg shadow-sm text-sm font-medium text-white bg-indigo-600 hover:bg-indigo-700 focus:outline-none transition disabled:opacity-50">
                         <span v-if="!loading.login">Sign In</span>
                         <i v-else data-lucide="loader-2" class="w-5 h-5 animate-spin"></i>
                     </button>
@@ -53,37 +82,44 @@
                     <i data-lucide="activity" class="w-6 h-6 text-indigo-400 mr-2"></i>
                     <span class="text-lg font-bold tracking-wider">qtask Console</span>
                 </div>
-                
+
                 <div class="flex-1 overflow-y-auto py-6">
                     <nav class="space-y-1 px-3">
-                        <a href="#" @click.prevent="switchTab('overview')" :class="['group flex items-center px-3 py-2.5 text-sm font-medium rounded-lg mb-4', activeTab === 'overview' ? 'bg-indigo-600 text-white' : 'text-slate-300 hover:bg-slate-800 hover:text-white']">
+                        <a href="#" @click.prevent="switchTab('overview')"
+                            :class="['group flex items-center px-3 py-2.5 text-sm font-medium rounded-lg mb-4', activeTab === 'overview' ? 'bg-indigo-600 text-white' : 'text-slate-300 hover:bg-slate-800 hover:text-white']">
                             <i data-lucide="pie-chart" class="w-5 h-5 mr-3"></i> Realtime Overview
                         </a>
-                        
-                        <div class="px-3 text-xs font-semibold text-slate-500 uppercase tracking-wider mb-2 mt-6">Active Queues</div>
-                        
+
+                        <div class="px-3 text-xs font-semibold text-slate-500 uppercase tracking-wider mb-2 mt-6">Active
+                            Queues</div>
+
                         <!-- Queue List in Sidebar -->
-                        <div v-if="Object.keys(stats.queues || {}).length === 0" class="px-3 py-2 text-sm text-slate-500">No queues found</div>
-                        <a v-for="(info, qname) in stats.queues" :key="qname" 
-                           href="#" @click.prevent="openQueueDetail(qname)" 
-                           :class="['group flex items-center justify-between px-3 py-2 text-sm font-medium rounded-lg transition-colors', activeTab === 'queue' && activeQueue === qname ? 'bg-indigo-600/20 text-indigo-300' : 'text-slate-300 hover:bg-slate-800']">
+                        <div v-if="Object.keys(stats.queues || {}).length === 0"
+                            class="px-3 py-2 text-sm text-slate-500">No queues found</div>
+                        <a v-for="(info, qname) in stats.queues" :key="qname" href="#"
+                            @click.prevent="openQueueDetail(qname)"
+                            :class="['group flex items-center justify-between px-3 py-2 text-sm font-medium rounded-lg transition-colors', activeTab === 'queue' && activeQueue === qname ? 'bg-indigo-600/20 text-indigo-300' : 'text-slate-300 hover:bg-slate-800']">
                             <div class="flex items-center truncate">
                                 <i data-lucide="database" class="w-4 h-4 mr-2 text-slate-400"></i>
                                 <span class="truncate">{{ qname.replace(':stream', '') }}</span>
                             </div>
-                            <span v-if="info.dlq_length > 0" class="bg-red-500/20 text-red-400 py-0.5 px-2 rounded-full text-xs">{{ info.dlq_length }}</span>
+                            <span v-if="info.dlq_length > 0"
+                                class="bg-red-500/20 text-red-400 py-0.5 px-2 rounded-full text-xs">{{ info.dlq_length
+                                }}</span>
                         </a>
                     </nav>
                 </div>
-                
+
                 <div class="p-4 border-t border-slate-800">
                     <div class="flex flex-col mb-4 space-y-2">
-                         <label class="text-xs text-slate-400 flex items-center justify-between">
+                        <label class="text-xs text-slate-400 flex items-center justify-between">
                             Refresh Rate: <span class="text-white">{{ refreshRate }}s</span>
-                         </label>
-                         <input type="range" min="1" max="30" v-model="refreshRate" class="w-full h-1 bg-slate-700 rounded-lg appearance-none cursor-pointer">
+                        </label>
+                        <input type="range" min="1" max="30" v-model="refreshRate"
+                            class="w-full h-1 bg-slate-700 rounded-lg appearance-none cursor-pointer">
                     </div>
-                    <button @click="logout" class="flex w-full items-center px-3 py-2 text-sm font-medium text-slate-400 rounded-lg hover:bg-slate-800 hover:text-white transition-colors">
+                    <button @click="logout"
+                        class="flex w-full items-center px-3 py-2 text-sm font-medium text-slate-400 rounded-lg hover:bg-slate-800 hover:text-white transition-colors">
                         <i data-lucide="log-out" class="w-4 h-4 mr-2"></i> Sign Out
                     </button>
                 </div>
@@ -94,14 +130,18 @@
                 <!-- Topbar -->
                 <header class="h-16 bg-white border-b border-slate-200 flex items-center justify-between px-8 z-10">
                     <h2 class="text-xl font-semibold text-slate-800 capitalize">
-                        {{ activeTab === 'overview' ? 'System Overview' : 'Queue Inspector: ' + activeQueue.replace(':stream', '') }}
+                        {{ activeTab === 'overview' ? 'System Overview' : 'Queue Inspector: ' +
+                        activeQueue.replace(':stream', '') }}
                     </h2>
                     <div class="flex items-center space-x-4">
-                        <div class="flex items-center text-sm font-medium text-slate-500 bg-slate-100 px-3 py-1.5 rounded-full">
-                            <span class="w-2 h-2 rounded-full mr-2" :class="isRefreshing ? 'bg-green-500' : 'bg-slate-300'"></span>
+                        <div
+                            class="flex items-center text-sm font-medium text-slate-500 bg-slate-100 px-3 py-1.5 rounded-full">
+                            <span class="w-2 h-2 rounded-full mr-2"
+                                :class="isRefreshing ? 'bg-green-500' : 'bg-slate-300'"></span>
                             Auto-Sync: {{ isRefreshing ? 'ON' : 'OFF' }}
                         </div>
-                        <button @click="toggleRefresh" class="p-2 text-slate-400 hover:text-indigo-600 hover:bg-indigo-50 rounded-lg transition">
+                        <button @click="toggleRefresh"
+                            class="p-2 text-slate-400 hover:text-indigo-600 hover:bg-indigo-50 rounded-lg transition">
                             <i data-lucide="pause-circle" v-if="isRefreshing" class="w-5 h-5"></i>
                             <i data-lucide="play-circle" v-else class="w-5 h-5"></i>
                         </button>
@@ -110,49 +150,84 @@
 
                 <!-- Scrollable Content -->
                 <div class="flex-1 overflow-y-auto p-8 relative">
-                    
+
                     <!-- Overview Tab -->
                     <div v-if="activeTab === 'overview'" class="space-y-6">
                         <!-- Top Metrics -->
                         <div class="grid grid-cols-1 md:grid-cols-3 gap-6">
                             <div class="bg-white p-6 rounded-xl border border-slate-200 shadow-sm flex items-center">
-                                <div class="bg-blue-50 p-4 rounded-lg mr-4"><i data-lucide="cpu" class="w-8 h-8 text-blue-500"></i></div>
-                                <div><p class="text-sm font-medium text-slate-500">CPU Usage</p><h3 class="text-3xl font-bold text-slate-800">{{ stats?.system?.cpu_percent || 0 }}%</h3></div>
+                                <div class="bg-blue-50 p-4 rounded-lg mr-4"><i data-lucide="cpu"
+                                        class="w-8 h-8 text-blue-500"></i></div>
+                                <div>
+                                    <p class="text-sm font-medium text-slate-500">CPU Usage</p>
+                                    <h3 class="text-3xl font-bold text-slate-800">{{ stats?.system?.cpu_percent || 0 }}%
+                                    </h3>
+                                </div>
                             </div>
                             <div class="bg-white p-6 rounded-xl border border-slate-200 shadow-sm flex items-center">
-                                <div class="bg-emerald-50 p-4 rounded-lg mr-4"><i data-lucide="memory-stick" class="w-8 h-8 text-emerald-500"></i></div>
-                                <div><p class="text-sm font-medium text-slate-500">Memory Load</p><h3 class="text-3xl font-bold text-slate-800">{{ stats?.system?.memory_percent || 0 }}%</h3><p class="text-xs text-slate-400 mt-1">{{ stats?.system?.memory_used_mb || 0 }} MB Used</p></div>
+                                <div class="bg-emerald-50 p-4 rounded-lg mr-4"><i data-lucide="memory-stick"
+                                        class="w-8 h-8 text-emerald-500"></i></div>
+                                <div>
+                                    <p class="text-sm font-medium text-slate-500">Memory Load</p>
+                                    <h3 class="text-3xl font-bold text-slate-800">{{ stats?.system?.memory_percent || 0
+                                        }}%</h3>
+                                    <p class="text-xs text-slate-400 mt-1">{{ stats?.system?.memory_used_mb || 0 }} MB
+                                        Used</p>
+                                </div>
                             </div>
                             <div class="bg-white p-6 rounded-xl border border-slate-200 shadow-sm flex items-center">
-                                <div class="bg-purple-50 p-4 rounded-lg mr-4"><i data-lucide="hard-drive" class="w-8 h-8 text-purple-500"></i></div>
-                                <div><p class="text-sm font-medium text-slate-500">FastAPI Storage</p><h3 class="text-3xl font-bold text-slate-800">{{ stats?.storage?.file_count || 0 }} Files</h3><p class="text-xs text-slate-400 mt-1">{{ stats?.storage?.size_mb || 0 }} MB Total</p></div>
+                                <div class="bg-purple-50 p-4 rounded-lg mr-4"><i data-lucide="hard-drive"
+                                        class="w-8 h-8 text-purple-500"></i></div>
+                                <div>
+                                    <p class="text-sm font-medium text-slate-500">FastAPI Storage</p>
+                                    <h3 class="text-3xl font-bold text-slate-800">{{ stats?.storage?.file_count || 0 }}
+                                        Files</h3>
+                                    <p class="text-xs text-slate-400 mt-1">{{ stats?.storage?.size_mb || 0 }} MB Total
+                                    </p>
+                                </div>
                             </div>
                         </div>
 
                         <!-- Queues Cards -->
-                        <h3 class="text-lg font-semibold text-slate-800 mt-8 mb-4 flex items-center"><i data-lucide="layers" class="w-5 h-5 mr-2 text-slate-400"></i> Running Queues</h3>
-                        <div v-if="!stats.queues || Object.keys(stats.queues).length === 0" class="p-8 text-center text-slate-500 bg-white rounded-xl border border-dashed border-slate-300">
+                        <h3 class="text-lg font-semibold text-slate-800 mt-8 mb-4 flex items-center"><i
+                                data-lucide="layers" class="w-5 h-5 mr-2 text-slate-400"></i> Running Queues</h3>
+                        <div v-if="!stats.queues || Object.keys(stats.queues).length === 0"
+                            class="p-8 text-center text-slate-500 bg-white rounded-xl border border-dashed border-slate-300">
                             No active stream queues found in Redis.
                         </div>
                         <div class="grid grid-cols-1 lg:grid-cols-2 gap-6" v-else>
-                            <div v-for="(info, qname) in stats.queues" :key="qname" @click="openQueueDetail(qname)" class="bg-white p-6 rounded-xl border border-slate-200 shadow-sm hover:shadow-md hover:border-indigo-300 transition-all cursor-pointer group">
+                            <div v-for="(info, qname) in stats.queues" :key="qname" @click="openQueueDetail(qname)"
+                                class="bg-white p-6 rounded-xl border border-slate-200 shadow-sm hover:shadow-md hover:border-indigo-300 transition-all cursor-pointer group">
                                 <div class="flex justify-between items-start mb-4">
-                                    <div class="flex items-center"><div class="w-2 h-2 rounded-full bg-green-500 mr-2 animate-pulse"></div><h4 class="font-bold text-slate-800 text-lg">{{ qname.replace(':stream','') }}</h4></div>
-                                    <span class="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-slate-100 text-slate-800 border border-slate-200">Total: {{ info.length }}</span>
+                                    <div class="flex items-center">
+                                        <div class="w-2 h-2 rounded-full bg-green-500 mr-2 animate-pulse"></div>
+                                        <h4 class="font-bold text-slate-800 text-lg">{{ qname.replace(':stream','') }}
+                                        </h4>
+                                    </div>
+                                    <span
+                                        class="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-slate-100 text-slate-800 border border-slate-200">Total:
+                                        {{ info.length }}</span>
                                 </div>
-                                <div class="flex justify-between items-center bg-slate-50 p-3 rounded-lg border border-slate-100">
+                                <div
+                                    class="flex justify-between items-center bg-slate-50 p-3 rounded-lg border border-slate-100">
                                     <div class="text-sm">
-                                        <div class="text-slate-500 mb-1">Consumer Groups : <span class="font-bold text-slate-700">{{ info.groups?.length || 0 }}</span></div>
+                                        <div class="text-slate-500 mb-1">Consumer Groups : <span
+                                                class="font-bold text-slate-700">{{ info.groups?.length || 0 }}</span>
+                                        </div>
                                         <div class="flex -space-x-2 mt-2">
-                                            <div v-for="g in info.groups" class="px-2 py-1 bg-white border border-slate-200 rounded text-xs text-slate-600 shadow-sm z-10">{{ g.name }} ({{g.pending}} pending)</div>
+                                            <div v-for="g in info.groups"
+                                                class="px-2 py-1 bg-white border border-slate-200 rounded text-xs text-slate-600 shadow-sm z-10">
+                                                {{ g.name }} ({{g.pending}} pending)</div>
                                         </div>
                                     </div>
                                     <div v-if="info.dlq_length > 0" class="text-right">
-                                        <div class="text-xs text-red-500 font-bold mb-1 uppercase tracking-wide">Dead Letters</div>
+                                        <div class="text-xs text-red-500 font-bold mb-1 uppercase tracking-wide">Dead
+                                            Letters</div>
                                         <div class="text-2xl font-black text-red-600">{{ info.dlq_length }}</div>
                                     </div>
                                     <div v-else class="text-right">
-                                        <div class="text-xs text-emerald-500 font-bold mb-1 uppercase tracking-wide">Health</div>
+                                        <div class="text-xs text-emerald-500 font-bold mb-1 uppercase tracking-wide">
+                                            Health</div>
                                         <i data-lucide="check-circle" class="w-8 h-8 text-emerald-400 ml-auto"></i>
                                     </div>
                                 </div>
@@ -163,67 +238,119 @@
                     <!-- Queue Detail Tab -->
                     <div v-if="activeTab === 'queue'" class="flex flex-col h-full space-y-4">
                         <!-- Toolbar -->
-                        <div class="bg-white p-4 rounded-xl border border-slate-200 shadow-sm flex flex-wrap gap-4 items-center justify-between">
+                        <div
+                            class="bg-white p-4 rounded-xl border border-slate-200 shadow-sm flex flex-wrap gap-4 items-center justify-between">
                             <div class="flex space-x-2">
-                                <button @click="taskFilter = 'all'; fetchTasks()" :class="['px-4 py-2 rounded-lg text-sm font-medium transition', taskFilter === 'all' ? 'bg-slate-800 text-white' : 'bg-slate-100 text-slate-600 hover:bg-slate-200']">Recent Tasks (Stream)</button>
-                                <button @click="taskFilter = 'failed'; fetchTasks()" :class="['px-4 py-2 rounded-lg text-sm font-medium transition flex items-center', taskFilter === 'failed' ? 'bg-red-600 text-white' : 'bg-slate-100 text-slate-600 hover:bg-red-50']">
+                                <button @click="taskFilter = 'all'; fetchTasks()"
+                                    :class="['px-4 py-2 rounded-lg text-sm font-medium transition', taskFilter === 'all' ? 'bg-slate-800 text-white' : 'bg-slate-100 text-slate-600 hover:bg-slate-200']">Recent
+                                    Tasks (Stream)</button>
+                                <button @click="taskFilter = 'failed'; fetchTasks()"
+                                    :class="['px-4 py-2 rounded-lg text-sm font-medium transition flex items-center', taskFilter === 'failed' ? 'bg-red-600 text-white' : 'bg-slate-100 text-slate-600 hover:bg-red-50']">
                                     Dead Letters (DLQ)
-                                    <span v-if="stats.queues[activeQueue] && stats.queues[activeQueue].dlq_length > 0" class="ml-2 bg-white text-red-600 text-xs px-1.5 py-0.5 rounded-full">{{ stats.queues[activeQueue].dlq_length }}</span>
+                                    <span v-if="stats.queues[activeQueue] && stats.queues[activeQueue].dlq_length > 0"
+                                        class="ml-2 bg-white text-red-600 text-xs px-1.5 py-0.5 rounded-full">{{
+                                        stats.queues[activeQueue].dlq_length }}</span>
                                 </button>
                             </div>
                             <div class="flex space-x-2">
-                                <button v-if="taskFilter === 'failed' && (stats.queues[activeQueue]?.dlq_length > 0 || tasks.length > 0)" @click="requeueAll" class="flex items-center px-4 py-2 bg-emerald-500 hover:bg-emerald-600 text-white text-sm font-medium rounded-lg shadow-sm transition">
+                                <button
+                                    v-if="taskFilter === 'failed' && (stats.queues[activeQueue]?.dlq_length > 0 || tasks.length > 0)"
+                                    @click="requeueAll"
+                                    class="flex items-center px-4 py-2 bg-emerald-500 hover:bg-emerald-600 text-white text-sm font-medium rounded-lg shadow-sm transition">
                                     <i data-lucide="refresh-cw" class="w-4 h-4 mr-2"></i> Requeue All Failed
                                 </button>
-                                <button @click="fetchTasks" class="p-2 text-slate-400 hover:text-indigo-600 hover:bg-indigo-50 rounded-lg transition" title="Force Refresh">
+
+                                <div class="relative group ml-4 inline-block">
+                                    <button
+                                        class="flex items-center px-4 py-2 bg-red-100 text-red-700 hover:bg-red-600 hover:text-white text-sm font-medium rounded-lg shadow-sm transition">
+                                        <i data-lucide="shield-alert" class="w-4 h-4 mr-2"></i> Danger
+                                    </button>
+                                    <div
+                                        class="absolute right-0 pt-2 w-48 opacity-0 invisible group-hover:opacity-100 group-hover:visible transition-all z-50">
+                                        <div class="bg-white border border-slate-200 rounded-lg shadow-xl overflow-hidden">
+                                            <button @click="resetGroupCmd"
+                                                class="w-full text-left px-4 py-2 text-sm text-amber-700 hover:bg-amber-50 font-medium border-b border-slate-100">Reset
+                                                Group ($)</button>
+                                            <button @click="clearQueueCmd"
+                                                class="w-full text-left px-4 py-2 text-sm text-red-700 hover:bg-red-50 font-medium font-bold flex justify-between items-center">Purge
+                                                Data <i data-lucide="flame" class="w-4 h-4 text-red-500"></i></button>
+                                        </div>
+                                    </div>
+                                </div>
+                                <button @click="fetchTasks"
+                                    class="p-2 ml-2 text-slate-400 hover:text-indigo-600 hover:bg-indigo-50 rounded-lg transition"
+                                    title="Force Refresh">
                                     <i data-lucide="rotate-cw" class="w-5 h-5"></i>
                                 </button>
                             </div>
                         </div>
 
                         <!-- Data Grid -->
-                        <div class="bg-white border border-slate-200 rounded-xl shadow-sm flex-1 overflow-hidden flex flex-col">
+                        <div
+                            class="bg-white border border-slate-200 rounded-xl shadow-sm flex-1 overflow-hidden flex flex-col">
                             <div class="overflow-x-auto">
                                 <table class="min-w-full divide-y divide-slate-200">
                                     <thead class="bg-slate-50">
                                         <tr>
-                                            <th scope="col" class="px-6 py-3 text-left text-xs font-semibold text-slate-500 uppercase tracking-wider">Message ID</th>
-                                            <th scope="col" class="px-6 py-3 text-left text-xs font-semibold text-slate-500 uppercase tracking-wider">Action</th>
-                                            <th scope="col" class="px-6 py-3 text-left text-xs font-semibold text-slate-500 uppercase tracking-wider">Status</th>
-                                            <th scope="col" class="px-6 py-3 text-left text-xs font-semibold text-slate-500 uppercase tracking-wider">Payload Preview</th>
-                                            <th scope="col" class="px-6 py-3 text-right text-xs font-semibold text-slate-500 uppercase tracking-wider">Operate</th>
+                                            <th scope="col"
+                                                class="px-6 py-3 text-left text-xs font-semibold text-slate-500 uppercase tracking-wider">
+                                                Message ID</th>
+                                            <th scope="col"
+                                                class="px-6 py-3 text-left text-xs font-semibold text-slate-500 uppercase tracking-wider">
+                                                Action</th>
+                                            <th scope="col"
+                                                class="px-6 py-3 text-left text-xs font-semibold text-slate-500 uppercase tracking-wider">
+                                                Status</th>
+                                            <th scope="col"
+                                                class="px-6 py-3 text-left text-xs font-semibold text-slate-500 uppercase tracking-wider">
+                                                Payload Preview</th>
+                                            <th scope="col"
+                                                class="px-6 py-3 text-right text-xs font-semibold text-slate-500 uppercase tracking-wider">
+                                                Operate</th>
                                         </tr>
                                     </thead>
                                     <tbody class="bg-white divide-y divide-slate-200 whitespace-nowrap text-sm">
                                         <tr v-if="loading.tasks">
                                             <td colspan="5" class="px-6 py-12 text-center text-slate-400">
-                                                <i data-lucide="loader-2" class="w-8 h-8 animate-spin mx-auto mb-2 text-indigo-400"></i> Loading tasks...
+                                                <i data-lucide="loader-2"
+                                                    class="w-8 h-8 animate-spin mx-auto mb-2 text-indigo-400"></i>
+                                                Loading tasks...
                                             </td>
                                         </tr>
                                         <tr v-else-if="tasks.length === 0">
                                             <td colspan="5" class="px-6 py-12 text-center text-slate-400">
-                                                <i data-lucide="inbox" class="w-10 h-10 mx-auto mb-2 text-slate-300"></i> No tasks found for this view.
+                                                <i data-lucide="inbox"
+                                                    class="w-10 h-10 mx-auto mb-2 text-slate-300"></i> No tasks found
+                                                for this view.
                                             </td>
                                         </tr>
                                         <tr v-for="t in tasks" :key="t.id" class="hover:bg-slate-50 transition-colors">
                                             <td class="px-6 py-4 font-mono text-xs text-slate-600">
                                                 {{ t.id }}
-                                                <div v-if="t.orig_id" class="text-[10px] text-slate-400 mt-1">orig: {{ t.orig_id }}</div>
+                                                <div v-if="t.orig_id" class="text-[10px] text-slate-400 mt-1">orig: {{
+                                                    t.orig_id }}</div>
                                             </td>
-                                            <td class="px-6 py-4 font-medium text-slate-900 border-l-2 border-transparent relative pl-8">
-                                                <span class="absolute left-3 top-1/2 -translate-y-1/2 w-2 h-2 rounded-full" :class="t.status === 'failed' ? 'bg-red-500' : 'bg-indigo-500'"></span>
+                                            <td
+                                                class="px-6 py-4 font-medium text-slate-900 border-l-2 border-transparent relative pl-8">
+                                                <span
+                                                    class="absolute left-3 top-1/2 -translate-y-1/2 w-2 h-2 rounded-full"
+                                                    :class="t.status === 'failed' ? 'bg-red-500' : 'bg-indigo-500'"></span>
                                                 {{ t.action }}
                                             </td>
                                             <td class="px-6 py-4">
-                                                <span :class="['px-2 inline-flex text-xs leading-5 font-semibold rounded-full', t.status === 'failed' ? 'bg-red-100 text-red-800' : 'bg-indigo-100 text-indigo-800']">
-                                                  {{ t.status.toUpperCase() }}
+                                                <span
+                                                    :class="['px-2 inline-flex text-xs leading-5 font-semibold rounded-full', t.status === 'failed' ? 'bg-red-100 text-red-800' : 'bg-indigo-100 text-indigo-800']">
+                                                    {{ t.status.toUpperCase() }}
                                                 </span>
                                             </td>
-                                            <td class="px-6 py-4 text-slate-500 font-mono text-xs max-w-xs truncate" :title="JSON.stringify(t.payload)">
-                                                {{ JSON.stringify(t.payload).substring(0, 50) }}{{ JSON.stringify(t.payload).length > 50 ? '...' : '' }}
+                                            <td class="px-6 py-4 text-slate-500 font-mono text-xs max-w-xs truncate"
+                                                :title="JSON.stringify(t.payload)">
+                                                {{ JSON.stringify(t.payload).substring(0, 50) }}{{
+                                                JSON.stringify(t.payload).length > 50 ? '...' : '' }}
                                             </td>
                                             <td class="px-6 py-4 text-right">
-                                                <button v-if="t.status === 'failed'" @click="requeueSingle(t.id)" class="text-emerald-600 hover:text-emerald-900 font-medium hover:underline flex items-center justify-end w-full">
+                                                <button v-if="t.status === 'failed'" @click="requeueSingle(t.id)"
+                                                    class="text-emerald-600 hover:text-emerald-900 font-medium hover:underline flex items-center justify-end w-full">
                                                     <i data-lucide="corner-up-left" class="w-4 h-4 mr-1"></i> Retry
                                                 </button>
                                                 <span v-else class="text-slate-300">-</span>
@@ -234,15 +361,18 @@
                             </div>
                         </div>
                     </div>
-                    
+
                 </div>
-                
+
                 <!-- Ops Logs Toast -->
                 <div class="absolute bottom-6 right-6 z-50 flex flex-col-reverse justify-end gap-2 pointer-events-none">
                     <transition-group name="fade">
-                        <div v-for="log in opsLogs" :key="log.id" :class="['pointer-events-auto px-4 py-3 rounded-lg shadow-lg border text-sm max-w-sm flex items-start', log.type === 'error' ? 'bg-red-50 text-red-800 border-red-200' : 'bg-slate-800 text-slate-100 border-slate-700']">
-                            <i v-if="log.type === 'error'" data-lucide="alert-circle" class="w-5 h-5 mr-3 shrink-0 text-red-500"></i>
-                            <i v-else-if="log.type === 'success'" data-lucide="check-circle-2" class="w-5 h-5 mr-3 shrink-0 text-emerald-400"></i>
+                        <div v-for="log in opsLogs" :key="log.id"
+                            :class="['pointer-events-auto px-4 py-3 rounded-lg shadow-lg border text-sm max-w-sm flex items-start', log.type === 'error' ? 'bg-red-50 text-red-800 border-red-200' : 'bg-slate-800 text-slate-100 border-slate-700']">
+                            <i v-if="log.type === 'error'" data-lucide="alert-circle"
+                                class="w-5 h-5 mr-3 shrink-0 text-red-500"></i>
+                            <i v-else-if="log.type === 'success'" data-lucide="check-circle-2"
+                                class="w-5 h-5 mr-3 shrink-0 text-emerald-400"></i>
                             <i v-else data-lucide="info" class="w-5 h-5 mr-3 shrink-0 text-indigo-400"></i>
                             <div>
                                 <h4 class="font-bold text-xs uppercase mb-0.5">{{ log.title }}</h4>
@@ -251,7 +381,7 @@
                         </div>
                     </transition-group>
                 </div>
-                
+
             </main>
         </template>
     </div>
@@ -266,31 +396,31 @@
                 const loginForm = reactive({ username: 'admin', password: '' });
                 const loginError = ref('');
                 const loading = reactive({ login: false, stats: false, tasks: false });
-                
+
                 // Dashboard States
                 const stats = ref({ queues: {}, system: {}, storage: {} });
                 const activeTab = ref('overview'); // overview, queue
                 const activeQueue = ref('');
-                
+
                 // Task Explorer States
                 const tasks = ref([]);
                 const taskFilter = ref('failed'); // all, failed
-                
+
                 // Settings
                 const isRefreshing = ref(true);
                 const refreshRate = ref(3);
                 let refreshTimer = null;
-                
+
                 // Logs
                 const opsLogs = ref([]);
-                
+
                 const addLog = (type, title, message) => {
                     const id = Date.now() + Math.random();
                     opsLogs.value.unshift({ id, type, title, message });
-                    if(opsLogs.value.length > 5) opsLogs.value.pop();
+                    if (opsLogs.value.length > 5) opsLogs.value.pop();
                     setTimeout(() => {
                         const idx = opsLogs.value.findIndex(l => l.id === id);
-                        if(idx > -1) opsLogs.value.splice(idx, 1);
+                        if (idx > -1) opsLogs.value.splice(idx, 1);
                     }, 5000);
                 };
 
@@ -299,17 +429,17 @@
                 };
 
                 const apiCall = async (endpoint, options = {}) => {
-                    if(!options.headers) options.headers = {};
+                    if (!options.headers) options.headers = {};
                     options.headers['Authorization'] = `Bearer ${token.value}`;
-                    
+
                     const res = await fetch(endpoint, options);
-                    
+
                     if (res.status === 401) {
                         logout();
                         throw new Error('Unauthorized');
                     }
                     if (!res.ok) {
-                        const err = await res.json().catch(()=>({}));
+                        const err = await res.json().catch(() => ({}));
                         throw new Error(err.detail || 'API request failed');
                     }
                     return await res.json();
@@ -322,18 +452,18 @@
                         const formData = new URLSearchParams();
                         formData.append('username', loginForm.username);
                         formData.append('password', loginForm.password);
-                        
+
                         const res = await fetch('/api/login', {
                             method: 'POST',
                             headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
                             body: formData
                         });
-                        
+
                         if (!res.ok) throw new Error('Incorrect credentials');
                         const data = await res.json();
                         token.value = data.access_token;
                         localStorage.setItem('qtask_token', data.access_token);
-                        
+
                         addLog('success', 'Authentication', 'Logged in successfully');
                         startPoller();
                     } catch (e) {
@@ -356,14 +486,14 @@
                         stats.value = data;
                         setupLucide();
                     } catch (e) {
-                         if(e.message !== 'Unauthorized') {
-                             addLog('error', 'Stats Sync Error', e.message);
-                         }
+                        if (e.message !== 'Unauthorized') {
+                            addLog('error', 'Stats Sync Error', e.message);
+                        }
                     }
                 };
 
                 const fetchTasks = async () => {
-                    if(!activeQueue.value) return;
+                    if (!activeQueue.value) return;
                     loading.tasks = true;
                     try {
                         // qname already has :stream so just pass it, the backend strips it
@@ -397,13 +527,13 @@
                 };
 
                 const requeueAll = async () => {
-                    if(!confirm("Are you sure you want to blast all failed tasks back to the active queue?")) return;
+                    if (!confirm("Are you sure you want to blast all failed tasks back to the active queue?")) return;
                     try {
                         addLog('info', 'Bulk Requeue Started', 'Processing all dead letters...');
                         const data = await apiCall(`/api/requeue/${activeQueue.value}`, {
                             method: 'POST'
                         });
-                        if(data.status === 'success') {
+                        if (data.status === 'success') {
                             addLog('success', 'Mass Restore Complete', `Successfully requeued ${data.requeued} messages!`);
                             fetchTasks();
                             fetchStats();
@@ -412,6 +542,48 @@
                         }
                     } catch (e) {
                         addLog('error', 'Action Failed', e.message);
+                    }
+                };
+
+                const getAdminPassword = (actionName) => {
+                    const pwd = window.prompt(`[SECURITY] Type admin password to authorize '${actionName}':`);
+                    return pwd || null;
+                };
+
+                const resetGroupCmd = async () => {
+                    if (!confirm("Are you absolutely sure you want to drop all pending message backlog and reset the group cursor?")) return;
+                    const pwd = getAdminPassword("Reset Cursor");
+                    if (!pwd) return;
+
+                    try {
+                        const data = await apiCall(`/api/queues/${activeQueue.value}/reset`, {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({ password: pwd, group: "spider_group" }) // for brevity handling spider_group or relying on default back-end
+                        });
+                        addLog('success', 'Group Reset', data.message);
+                        fetchStats();
+                        fetchTasks();
+                    } catch (e) {
+                        addLog('error', 'Reset Rejected', e.message);
+                    }
+                };
+
+                const clearQueueCmd = async () => {
+                    if (!confirm("DANGER: This action is irreversible. It will wipe all items in the primary queue and its dead-letter-queue. Continue?")) return;
+                    const pwd = getAdminPassword("Wipe Storage Queue");
+                    if (!pwd) return;
+
+                    try {
+                        const data = await apiCall(`/api/queues/${activeQueue.value}/clear`, {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({ password: pwd })
+                        });
+                        addLog('success', 'Purge Successful', data.message);
+                        switchTab('overview');
+                    } catch (e) {
+                        addLog('error', 'Purge Rejected', e.message);
                     }
                 };
 
@@ -424,16 +596,16 @@
 
                 const switchTab = (tab) => {
                     activeTab.value = tab;
-                    if(tab === 'overview') {
+                    if (tab === 'overview') {
                         activeQueue.value = null;
                         fetchStats();
                     }
                 };
 
                 const tick = () => {
-                    if(isRefreshing.value && token.value) {
+                    if (isRefreshing.value && token.value) {
                         fetchStats();
-                        if(activeTab.value === 'queue') {
+                        if (activeTab.value === 'queue') {
                             fetchTasks();
                         }
                     }
@@ -441,14 +613,14 @@
 
                 const startPoller = () => {
                     stopPoller();
-                    if(token.value) {
+                    if (token.value) {
                         tick(); // immediate
                         refreshTimer = setInterval(tick, refreshRate.value * 1000);
                     }
                 };
 
                 const stopPoller = () => {
-                    if(refreshTimer) clearInterval(refreshTimer);
+                    if (refreshTimer) clearInterval(refreshTimer);
                 };
 
                 const toggleRefresh = () => {
@@ -456,12 +628,12 @@
                 };
 
                 watch(refreshRate, () => {
-                    if(isRefreshing.value) startPoller();
+                    if (isRefreshing.value) startPoller();
                 });
 
                 onMounted(() => {
                     setupLucide();
-                    if(token.value) {
+                    if (token.value) {
                         startPoller();
                     }
                 });
@@ -474,10 +646,12 @@
                     token, loginForm, loginError, loading, login, logout,
                     stats, activeTab, activeQueue, switchTab, openQueueDetail,
                     tasks, taskFilter, fetchTasks, requeueSingle, requeueAll,
-                    isRefreshing, refreshRate, toggleRefresh, opsLogs
+                    isRefreshing, refreshRate, toggleRefresh, opsLogs,
+                    resetGroupCmd, clearQueueCmd
                 };
             }
         }).mount('#app');
     </script>
 </body>
+
 </html>

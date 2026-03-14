@@ -17,19 +17,23 @@ class Worker:
         result_q_name: Optional[str] = None,
         storage_url: Optional[str] = None,
         worker_group: str = "default_group",
-        worker_id: Optional[str] = None
+        worker_id: Optional[str] = None,
+        auto_claim: bool = True,
+        claim_interval: int = 300
     ):
         self.worker_id = worker_id or uuid.uuid4().hex[:8]
         self.worker_group = worker_group
         self.storage = RemoteStorage(storage_url) if storage_url else None
         
         self.listen_q = SmartQueue(
-            listen_url, listen_q_name, self.worker_group, self.worker_id, self.storage
+            listen_url, listen_q_name, self.worker_group, self.worker_id, self.storage,
+            auto_claim=auto_claim, claim_interval=claim_interval
         )
         
         if result_url and result_q_name:
             self.result_q = SmartQueue(
-                result_url, result_q_name, self.worker_group, self.worker_id, self.storage
+                result_url, result_q_name, self.worker_group, self.worker_id, self.storage,
+                auto_claim=auto_claim, claim_interval=claim_interval
             )
         else:
             self.result_q = None
@@ -47,6 +51,7 @@ class Worker:
         logger.info(f"Worker [{self.worker_id}] in Group [{self.worker_group}] Started.")
         logger.info(f"Listening on Queue: {self.listen_q.queue_name}")
         while True:
+            msg_context = None
             try:
                 payload, msg_context = self.listen_q.pop_blocking()
                 if not payload:

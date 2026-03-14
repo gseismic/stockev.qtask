@@ -40,8 +40,13 @@ pip install -e ".[test]"
 from qtask import SmartQueue, RemoteStorage
 
 storage = RemoteStorage("http://localhost:8000")
+
+# 配置带密码保护的 Redis 连接 (支持 Redis 6.0 ACL 或经典密码)
+# 标准格式： redis://[:password]@localhost:6379/0
+redis_uri = "redis://:mypassword@localhost:6379/0"
+
 queue = SmartQueue(
-    redis_url="redis://localhost:6379/0", 
+    redis_url=redis_uri, 
     queue_name="spider:tasks", 
     storage=storage,
     worker_group="spider_group" # 推送任务时不严格要求，但须与消费者匹配
@@ -62,10 +67,13 @@ queue.push({
 ```python
 from qtask import Worker
 
+# 同样使用带密码的 URI 格式
+redis_uri = "redis://:mypassword@localhost:6379/0"
+
 worker = Worker(
-    listen_url="redis://localhost:6379/0",
+    listen_url=redis_uri,
     listen_q_name="spider:tasks",
-    result_url="redis://localhost:6379/0",  # 当 handler 返回数据时，会自动被推往该结果队列
+    result_url=redis_uri,  # 当 handler 返回数据时，会自动被推往该结果队列
     result_q_name="db:tasks",
     storage_url="http://localhost:8000",
     worker_group="spider_group"
@@ -97,35 +105,42 @@ worker.run()
 
 包含 HTTPBasic 白名单验证的 FastAPI 微服务。既负责存储 Worker 传来的重量级文件，又在 `/dashboard` 上搭载了监控面板。
 
-**启动服务**：
+**启动大对象储存与监控微服务**：
 ```bash
+# 修改环境变量以指定带密码的 Redis 实例 和 Web 认证密码
+export QTASK_REDIS_URL="redis://:mypassword@localhost:6379/0"
+export QTASK_ADMIN_USER="admin"
+export QTASK_ADMIN_PASS="MySecurePassword"
+
 # 默认占用 8000 端口
 python server/storage_server.py
 ```
 
 **访问面板**：
 浏览器打开：`http://localhost:8000/dashboard`
-* 默认用户名：`admin`
-* 默认密码：`admin123`
-
-*(如需修改账密，可以挂载系统环境变量 `QTASK_ADMIN_USER` 与 `QTASK_ADMIN_PASS`)*
+* 根据上方指引，使用环境变量设定的 `QTASK_ADMIN_USER` 和 `QTASK_ADMIN_PASS` 登录。
 
 ### 🎮 诊断终端 (CLI 工具)
 
-安装包环境后，终端自动注入执行命令 `qtask`：
+安装包环境后，终端自动注入执行命令 `qtask`。全局共享 `--url` (即 `-u`) 参数连接安全环境：
 
 1. **查看队列整体数据 (`index`)**
    ```bash
-   qtask index spider:tasks
+   qtask index spider:tasks -u redis://:mypassword@localhost:6379/0
    ```
 2. **查看挂靠在此队列上的微服务消费组 (`groups`)**
    ```bash
-   qtask groups spider:tasks
+   qtask groups spider:tasks -u redis://:mypassword@localhost:6379/0
    ```
 3. **查阅死信（异常/被弃用）队列日志 (`dlq`)**
    ```bash
    # 查看被废弃了多少条数据包，并自动截取前 5 条作为预览报错排查
-   qtask dlq spider:tasks --preview
+   qtask dlq spider:tasks --preview -u redis://:mypassword@localhost:6379/0
+   ```
+4. **安全摧毁队列**
+   ```bash
+   # 深度核销 (Wipe) 危险功能示例
+   qtask clear spider:tasks -u redis://:mypassword@localhost:6379/0
    ```
 
 ---

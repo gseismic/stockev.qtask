@@ -14,7 +14,9 @@ class SmartQueue:
         worker_group: str = "default_group",
         worker_id: str = "default_worker", 
         storage: Optional[RemoteStorage] = None,
-        large_threshold_bytes: int = 1024 * 50  # 默认 >50KB 存远程
+        large_threshold_bytes: int = 1024 * 50,  # 默认 >50KB 存远程
+        auto_claim: bool = True,
+        claim_interval: int = 300  # 自动认领检查的最小间隔(秒)
     ):
         self.redis = redis.from_url(redis_url, decode_responses=True)
         self.queue_name = f"{queue_name}:stream"
@@ -24,6 +26,9 @@ class SmartQueue:
         
         self.storage = storage
         self.large_threshold_bytes = large_threshold_bytes
+        self.auto_claim = auto_claim
+        self.claim_interval = claim_interval
+        self._last_claim_check = 0
         
         # 确保消费组存在
         self._ensure_consumer_group()
@@ -50,18 +55,30 @@ class SmartQueue:
         self.redis.xadd(self.queue_name, {"payload": msg})
 
     def pop_blocking(self, timeout: int = 0) -> Tuple[Optional[Dict[str, Any]], Optional[Dict[str, str]]]:
-        """出队：使用消费组拉取数据，并自动还原大对象"""
-        claimed_msg = self._claim_pending_msgs()
-        if claimed_msg:
-            return self._process_raw_msg(claimed_msg[0], claimed_msg[1])
+        """出队：使用消费组拉取数据，如果在 auto_claim 且到达检查时间则做一次抢占"""
+        import time
+        if self.auto_claim:
+            now = time.time()
+            if now - self._last_claim_check >= self.claim_interval:
+                self._last_claim_check = now
+                claimed_msg = self._claim_pending_msgs()
+                if claimed_msg:
+                    return self._process_raw_msg(claimed_msg[0], claimed_msg[1])
             
         # 设置 block=timeout_ms (timeout 转换为毫秒)
         block_ms = timeout * 1000 if timeout > 0 else 0
         
         streams = {self.queue_name: ">"}
-        messages = self.redis.xreadgroup(
-            self.worker_group, self.worker_id, streams, count=1, block=block_ms
-        )
+        try:
+            messages = self.redis.xreadgroup(
+                self.worker_group, self.worker_id, streams, count=1, block=block_ms
+            )
+        except redis.exceptions.ResponseError as e:
+            if "NOGROUP" in str(e):
+                logger.warning(f"Consumer group {self.worker_group} missing. Attempting recovery...")
+                self._ensure_consumer_group()
+                return self.pop_blocking(timeout)
+            raise
         
         if not messages:
             return None, None
@@ -95,6 +112,55 @@ class SmartQueue:
         
         return None
 
+    def claim_all(self, idle_time_ms: int = 300000) -> int:
+        """管理员命令：一次性大批量认领所有超时的遗留节点任务"""
+        count = 0
+        while True:
+            pending_info = self.redis.xpending_range(
+                self.queue_name, self.worker_group, min="-", max="+", count=100
+            )
+            if not pending_info:
+                break
+                
+            claimed_ids = []
+            for p in pending_info:
+                if p['time_since_delivered'] > idle_time_ms:
+                    claimed_ids.append(p['message_id'])
+                    
+            if not claimed_ids:
+                break
+                
+            claimed = self.redis.xclaim(
+                self.queue_name, self.worker_group, self.worker_id, idle_time_ms, claimed_ids
+            )
+            count += len(claimed)
+            
+            if len(pending_info) < 100:
+                break
+        return count
+
+    def reset_group(self):
+        """管理员命令：将消费组游标重置为最新$，丢弃堆积未读"""
+        try:
+            self.redis.xgroup_setid(self.queue_name, self.worker_group, id="$")
+            return True
+        except Exception as e:
+            logger.error(f"Reset group failed: {e}")
+            return False
+
+    def clear_all(self):
+        """管理员命令：排空主 Stream 和 DLQ 内所有数据 (保留组定义)"""
+        try:
+            # XTRIM MAXLEN 0 可以清空内容但保留 Stream 结构与 Groups
+            self.redis.xtrim(self.queue_name, maxlen=0)
+            self.redis.xtrim(self.dlq, maxlen=0)
+            # 还是跑一下 ensure 确保万一没流时能创建好
+            self._ensure_consumer_group()
+            return True
+        except Exception as e:
+            logger.error(f"Clear queue failed: {e}")
+            return False
+
     def _process_raw_msg(self, msg_id: str, raw_payload: str) -> Tuple[Optional[Dict[str, Any]], Optional[Dict[str, str]]]:
         msg_context = {"msg_id": msg_id, "raw_payload": raw_payload}
         try:
@@ -118,7 +184,14 @@ class SmartQueue:
         raw_payload = msg_context["raw_payload"]
         
         # 确认消息
-        self.redis.xack(self.queue_name, self.worker_group, msg_id)
+        try:
+            self.redis.xack(self.queue_name, self.worker_group, msg_id)
+        except redis.exceptions.ResponseError as e:
+            if "NOGROUP" in str(e):
+                self._ensure_consumer_group()
+                self.redis.xack(self.queue_name, self.worker_group, msg_id)
+            else:
+                raise
         
         # 清除大对象文件
         parsed = json.loads(raw_payload)
@@ -133,7 +206,13 @@ class SmartQueue:
         msg_id = msg_context.get("msg_id")
         raw_payload = msg_context.get("raw_payload")
         
-        # 将失败消息投递到死信 Stream
-        self.redis.xadd(self.dlq, {"payload": raw_payload, "original_id": msg_id})
-        # ACK 移出待处理列表，防止陷入死循环重试
-        self.redis.xack(self.queue_name, self.worker_group, msg_id)
+        if not msg_id:
+            return
+
+        try:
+            # 将失败消息投递到死信 Stream
+            self.redis.xadd(self.dlq, {"payload": raw_payload, "original_id": msg_id})
+            # ACK 移出待处理列表，防止陷入死循环重试
+            self.redis.xack(self.queue_name, self.worker_group, msg_id)
+        except Exception as e:
+            logger.error(f"Failed to move message {msg_id} to DLQ: {e}")

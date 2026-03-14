@@ -128,6 +128,55 @@ def cmd_requeue(
     except redis.exceptions.ResponseError as e:
         typer.echo(f"❌ Error: {e}")
 
+@app.command("claim")
+def cmd_claim(
+    queue_name: str = typer.Argument(..., help="The base name of the underlying queue (e.g., spider:tasks)"),
+    group: str = typer.Option("default_group", "--group", help="Consumer group name"),
+    idle_ms: int = typer.Option(300000, "--idle-ms", help="Only claim messages idle for more than this ms (default 5 mins)"),
+    redis_url: str = typer.Option("redis://localhost:6379/0", help="Redis connection URL")
+):
+    """Admin: Force claim all zombie pending messages"""
+    from qtask.queue import SmartQueue
+    q = SmartQueue(redis_url, queue_name, worker_group=group)
+    try:
+        count = q.claim_all(idle_time_ms=idle_ms)
+        typer.echo(f"🎉 Successfully claimed {count} zombie messages!")
+    except Exception as e:
+        typer.echo(f"❌ Error: {e}")
+
+@app.command("reset")
+def cmd_reset(
+    queue_name: str = typer.Argument(..., help="The base name of the underlying queue (e.g., spider:tasks)"),
+    group: str = typer.Option("default_group", "--group", help="Consumer group name"),
+    redis_url: str = typer.Option("redis://localhost:6379/0", help="Redis connection URL"),
+    force: bool = typer.Option(False, "--force", "-f", help="Bypass confirmation prompt")
+):
+    """Admin: Reset consumer group cursor to the latest message ($)"""
+    if not force:
+        typer.confirm(f"Are you sure you want to reset group '{group}' on queue '{queue_name}'?\nThis will ignore all currently backlogged messages in the stream.", abort=True)
+    from qtask.queue import SmartQueue
+    q = SmartQueue(redis_url, queue_name, worker_group=group)
+    if q.reset_group():
+        typer.echo(f"✅ Cursor for group {group} reset to latest ($).")
+    else:
+        typer.echo("❌ Failed to reset group.")
+
+@app.command("clear")
+def cmd_clear(
+    queue_name: str = typer.Argument(..., help="The base name of the underlying queue (e.g., spider:tasks)"),
+    redis_url: str = typer.Option("redis://localhost:6379/0", help="Redis connection URL"),
+    force: bool = typer.Option(False, "--force", "-f", help="Bypass confirmation prompt")
+):
+    """Admin: DANGER! Purge all data in the stream and its DLQ"""
+    if not force:
+        typer.confirm(f"DANGER ZONE: Are you permanently deleting ALL data in queue '{queue_name}' and its DLQ?", abort=True)
+    from qtask.queue import SmartQueue
+    q = SmartQueue(redis_url, queue_name)
+    if q.clear_all():
+        typer.echo(f"💣 Stream {queue_name} has been completely wiped and recreated.")
+    else:
+        typer.echo("❌ Failed to clear queue.")
+
 def main():
     try:
         app()
