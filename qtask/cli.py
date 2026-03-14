@@ -1,37 +1,43 @@
-"""
-qtask CLI — Redis Stream 分布式任务队列运维工具
+"""qtask CLI — Redis Stream 分布式任务队列运维工具
 
+\b
 概念速查:
-  namespace    项目/任务级命名空间（如 "proj_a"），多台主机的 Worker 可共享。
-               用于按项目分组管理所有队列，项目结束后可一键清除全部数据。
+  namespace    项目/任务级命名空间，如 "proj_a"。多台主机 Worker 共享同一 namespace。
+               项目结束后可一键清除该 namespace 下所有数据。
   queue_name   队列基础名（不含 :stream 后缀）。
-               有 namespace 时格式为 "{ns}:{name}"，如 "proj_a:spider:tasks"。
-  worker_id    单个 Worker 进程的唯一标识，格式为 "{hostname}-{random}"。
-               用于在同一 namespace/group 中区分不同主机/进程。
-  worker_group Redis Consumer Group 名，同 group 内多个 Worker 共享消费。
+               有 namespace 时格式为 ns:name，如 proj_a:spider:tasks。
+  worker_id    Worker 进程唯一标识，格式 hostname-random，自动生成。
+  worker_group Redis Consumer Group，同组内多 Worker 共享消费同一队列。
 
-常用命令示例:
+\b
+常用命令:
   qtask index proj_a:spider:tasks
   qtask history proj_a:spider:tasks --status failed --days 7
   qtask dlq proj_a:spider:tasks --preview
-  qtask requeue proj_a:spider:tasks
   qtask ns list
   qtask ns purge proj_a -f
   qtask settings set --keep-days 30
 
+\b
 环境变量:
-  QTASK_REDIS_URL   默认 Redis URL，所有命令的 --redis-url 均读取此变量。
+  QTASK_REDIS_URL   设置后所有命令无需再传 --redis-url
 """
+
+import os, sys
+# 确保 rich/typer help 在任何终端（含伪终端/管道）下都以合理宽度渲染，对 LLM 工具调用友好
+if "COLUMNS" not in os.environ:
+    os.environ["COLUMNS"] = "120"
 
 import typer
 import redis
 from loguru import logger
-import sys
 
 app = typer.Typer(
     name="qtask",
     help=__doc__,
     no_args_is_help=True,
+    pretty_exceptions_enable=False,
+    context_settings={"max_content_width": 120},
 )
 
 
