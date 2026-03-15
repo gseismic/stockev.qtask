@@ -13,11 +13,9 @@ class Worker:
     """任务执行调度器
 
     namespace 参数：
-        任务/项目级命名空间，与 worker_id/worker_group 正交。
-        namespace 标识"这批任务属于哪个项目"，
-        worker_id/worker_group 标识"哪台机器/哪个进程在处理任务"。
-        多台主机的多个 Worker 可以共享同一 namespace，
-        但拥有不同的 worker_id（默认自动生成唯一 ID）。
+        项目/任务级命名空间。
+        同一 namespace 的多个 Worker 会自动编为一个消费者组，共享任务负载。
+        这是在不暴露底层技术概念的情况下，唯一需要配置的分组标识。
     """
 
     def __init__(
@@ -27,19 +25,12 @@ class Worker:
         result_url: Optional[str] = None,
         result_q_name: Optional[str] = None,
         storage_url: Optional[str] = None,
-        worker_group: str = None,          # None → 由 SmartQueue 根据 namespace 自动生成
-        worker_id: Optional[str] = None,
         auto_claim: bool = True,
         claim_interval: int = 300,
         enable_history: bool = True,
         namespace: str = None,             # 项目/任务级命名空间
     ):
-        # worker_id 含主机名，方便多主机环境识别是哪台机器在处理任务
-        _hostname = socket.gethostname().split('.')[0][:12]  # 取短主机名（去掉域名部分）
-        self.worker_id = worker_id or f"{_hostname}-{uuid.uuid4().hex[:6]}"
         self.namespace = namespace or ""
-        # worker_group: 若未显式指定，交给 SmartQueue 按 namespace 自动推导
-        self.worker_group = worker_group
         self.storage = RemoteStorage(storage_url) if storage_url else None
 
         # 初始化 TaskHistoryStore（共享同一个 Redis 连接）
@@ -58,8 +49,6 @@ class Worker:
 
         self.listen_q = SmartQueue(
             listen_url, listen_q_name,
-            worker_group=self.worker_group,
-            worker_id=self.worker_id,
             storage=self.storage,
             auto_claim=auto_claim,
             claim_interval=claim_interval,
@@ -69,12 +58,13 @@ class Worker:
         )
         # 用加过 ns 前缀的实际基础名（不含 :stream）创建 history
         self.listen_q.history = _make_history(self.listen_q._base_name)
+        
+        self.worker_id = self.listen_q.worker_id
+        self.worker_group = self.listen_q.worker_group
 
         if result_url and result_q_name:
             self.result_q = SmartQueue(
                 result_url, result_q_name,
-                worker_group=self.worker_group,
-                worker_id=self.worker_id,
                 storage=self.storage,
                 auto_claim=auto_claim,
                 claim_interval=claim_interval,

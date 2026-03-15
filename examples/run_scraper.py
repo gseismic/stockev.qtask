@@ -3,11 +3,10 @@ run_scraper.py — 爬虫 Worker 示例
 
 监听 spider:tasks 队列，将大对象结果推送到 db:tasks 队列。
 
-注意: namespace 与 worker_id 的区别:
+提示: namespace 作为唯一需要的分组维度:
   namespace  → 标识"这批任务属于哪个项目" (如 "stockev")
-               同一 namespace 下多台主机可以并行处理，数据自动归组
-  worker_id  → 标识"哪台机器/哪个进程在处理"，自动生成为 hostname-random
-               无需手动设置，日志和监控中用于区分不同主机
+               只需分配相同的 namespace，多台主机自动被编为同一消费者组协同处理任务。
+               底层的 worker_group 和 worker_id 将自动推导和生成，对用户完全透明。
 
 history 记录问题排查:
   history 依赖 enable_history=True（默认启用）且 namespace 参数与生产者一致。
@@ -26,8 +25,6 @@ worker = Worker(
     result_q_name="db:tasks",       # 实际 key: stockev:db:tasks:stream
     storage_url="http://127.0.0.1:8000",
     namespace=NAMESPACE,            # ← 必须与生产者 namespace 保持一致
-    # worker_group 不传则自动为 {namespace}_group = "stockev_group"
-    # worker_id   不传则自动为 {hostname}-{random}，多主机时日志中可识别来自哪台机器
 )
 
 

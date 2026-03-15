@@ -6,8 +6,7 @@
                项目结束后可一键清除该 namespace 下所有数据。
   queue_name   队列基础名（不含 :stream 后缀）。
                有 namespace 时格式为 ns:name，如 proj_a:spider:tasks。
-  worker_id    Worker 进程唯一标识，格式 hostname-random，自动生成。
-  worker_group Redis Consumer Group，同组内多 Worker 共享消费同一队列。
+               系统的消费者组和流标识均由 namespace 自动推导管理。
 
 \b
 常用命令:
@@ -152,8 +151,7 @@ def cmd_requeue(
 
 @app.command("claim")
 def cmd_claim(
-    queue_name: str = typer.Argument(..., help="队列基础名", metavar="QUEUE"),
-    group: str = typer.Option("default_group", "--group", "-g", help="Consumer Group 名（见 'qtask groups' 输出）"),
+    queue_name: str = typer.Argument(..., help="队列基础名，含 namespace 前缀时如 proj_a:spider:tasks", metavar="QUEUE"),
     idle_ms: int = typer.Option(300000, "--idle-ms", help="只认领超过此毫秒数仍未 ACK 的 Pending 消息（默认 5 分钟）"),
     redis_url: str = REDIS_URL_OPT,
 ):
@@ -162,15 +160,16 @@ def cmd_claim(
     Worker 启动时若设置 auto_claim=True，此操作会自动执行。
     """
     from qtask.queue import SmartQueue
-    q = SmartQueue(redis_url, queue_name, worker_group=group)
+    ns = queue_name.split(":", 1)[0] if ":" in queue_name else ""
+    q_base = queue_name.split(":", 1)[1] if ":" in queue_name else queue_name
+    q = SmartQueue(redis_url, q_base, namespace=ns)
     count = q.claim_all(idle_time_ms=idle_ms)
     typer.echo(f"Claimed {count} zombie message(s).")
 
 
 @app.command("reset")
 def cmd_reset(
-    queue_name: str = typer.Argument(..., help="队列基础名", metavar="QUEUE"),
-    group: str = typer.Option("default_group", "--group", "-g", help="Consumer Group 名"),
+    queue_name: str = typer.Argument(..., help="队列基础名，含 namespace 前缀时如 proj_a:spider:tasks", metavar="QUEUE"),
     redis_url: str = REDIS_URL_OPT,
     force: bool = typer.Option(False, "--force", "-f", help="跳过确认"),
 ):
@@ -178,19 +177,23 @@ def cmd_reset(
 
     执行后积压消息会被 Worker 跳过，适用于积压数据已无效、需要从现在开始处理的场景。
     """
+    ns = queue_name.split(":", 1)[0] if ":" in queue_name else ""
+    q_base = queue_name.split(":", 1)[1] if ":" in queue_name else queue_name
+    derived_group = f"{ns}_group" if ns else "default_group"
+
     if not force:
-        typer.confirm(f"Reset group '{group}' on '{queue_name}'? Backlogged messages will be SKIPPED.", abort=True)
+        typer.confirm(f"Reset group '{derived_group}' on '{queue_name}'? Backlogged messages will be SKIPPED.", abort=True)
     from qtask.queue import SmartQueue
-    q = SmartQueue(redis_url, queue_name, worker_group=group)
+    q = SmartQueue(redis_url, q_base, namespace=ns)
     if q.reset_group():
-        typer.echo(f"Group '{group}' cursor reset to latest ($).")
+        typer.echo(f"Group '{derived_group}' cursor reset to latest ($).")
     else:
         typer.echo("Failed.")
 
 
 @app.command("clear")
 def cmd_clear(
-    queue_name: str = typer.Argument(..., help="队列基础名", metavar="QUEUE"),
+    queue_name: str = typer.Argument(..., help="队列基础名，含 namespace 前缀时如 proj_a:spider:tasks", metavar="QUEUE"),
     redis_url: str = REDIS_URL_OPT,
     force: bool = typer.Option(False, "--force", "-f", help="跳过确认"),
     hard: bool = typer.Option(False, "--hard", help="同时清除所有历史记录（Hash + SortedSet），彻底重置"),
@@ -205,7 +208,9 @@ def cmd_clear(
     if not force:
         typer.confirm(f"DANGER: Clear [{mode}] for '{queue_name}'?", abort=True)
     from qtask.queue import SmartQueue
-    q = SmartQueue(redis_url, queue_name)
+    ns = queue_name.split(":", 1)[0] if ":" in queue_name else ""
+    q_base = queue_name.split(":", 1)[1] if ":" in queue_name else queue_name
+    q = SmartQueue(redis_url, q_base, namespace=ns)
     if q.clear_all(clear_history=hard):
         typer.echo(f"Queue '{queue_name}' cleared." + (" (history wiped)" if hard else ""))
     else:

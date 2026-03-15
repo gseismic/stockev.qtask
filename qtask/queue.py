@@ -1,6 +1,8 @@
 import json
 import time
 import redis
+import socket
+import uuid
 from loguru import logger
 from typing import Tuple, Dict, Any, Optional
 from .storage import RemoteStorage
@@ -19,16 +21,12 @@ class SmartQueue:
         {namespace}: 为前缀，例如 namespace="proj_a", queue_name="spider:tasks"
         → Redis key: proj_a:spider:tasks:stream
         方便按项目统一查看和清除所有相关数据。
-        可在多台主机的多个 Worker 上使用同一 namespace，worker_id/worker_group
-        仍用于区分不同的 Worker 节点进程。
     """
 
     def __init__(
         self,
         redis_url: str,
         queue_name: str,
-        worker_group: str = None,          # None 时按 namespace 自动生成
-        worker_id: str = "default_worker",
         storage: Optional[RemoteStorage] = None,
         large_threshold_bytes: int = 1024 * 50,
         auto_claim: bool = True,
@@ -47,11 +45,10 @@ class SmartQueue:
         self._base_name = _prefixed         # 用于构造 DLQ 等
         self.dlq = f"{_prefixed}:stream_dlq"
 
-        # worker_group 默认值：有 namespace 时用 {ns}_group，否则 default_group
-        if worker_group is None:
-            worker_group = f"{self.namespace}_group" if self.namespace else "default_group"
-        self.worker_group = worker_group
-        self.worker_id = worker_id
+        # worker_group/worker_id 全部自动推导生成
+        self.worker_group = f"{self.namespace}_group" if self.namespace else "default_group"
+        _hostname = socket.gethostname().split('.')[0][:12]
+        self.worker_id = f"{_hostname}-{uuid.uuid4().hex[:6]}"
 
         self.storage = storage
         self.large_threshold_bytes = large_threshold_bytes
@@ -258,7 +255,7 @@ class SmartQueue:
             self._move_to_dlq(msg_context)
             return None, None
 
-    def ack(self, msg_context: Dict[str, str]):
+    def ack(self, msg_context: Dict[str, str], worker_id: str = ""):
         msg_id = msg_context["msg_id"]
         raw_payload = msg_context["raw_payload"]
         pop_ts = msg_context.get("_pop_ts", time.time())
@@ -281,14 +278,14 @@ class SmartQueue:
 
         if self.history:
             try:
-                self.history.record_ack(msg_id, time.time() - pop_ts)
+                self.history.record_ack(msg_id, time.time() - pop_ts, worker_id=worker_id)
             except Exception as e:
                 logger.warning(f"History record_ack failed (non-critical): {e}")
 
-    def fail(self, msg_context: Dict[str, str], reason: str = ""):
-        self._move_to_dlq(msg_context, reason=reason)
+    def fail(self, msg_context: Dict[str, str], reason: str = "", worker_id: str = ""):
+        self._move_to_dlq(msg_context, reason=reason, worker_id=worker_id)
 
-    def _move_to_dlq(self, msg_context: Dict[str, str], reason: str = ""):
+    def _move_to_dlq(self, msg_context: Dict[str, str], reason: str = "", worker_id: str = ""):
         msg_id = msg_context.get("msg_id")
         raw_payload = msg_context.get("raw_payload")
         if not msg_id:
@@ -302,7 +299,7 @@ class SmartQueue:
         if self.history:
             try:
                 self.history.record_retry(msg_id)
-                self.history.record_fail(msg_id, reason or "moved to DLQ")
+                self.history.record_fail(msg_id, reason or "moved to DLQ", worker_id=worker_id)
             except Exception as e:
                 logger.warning(f"History record_fail failed (non-critical): {e}")
 

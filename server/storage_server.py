@@ -209,7 +209,6 @@ def requeue_dlq(queue_name: str, req: RequeueRequest = None):
 
 class QueueAdminRequest(BaseModel):
     password: str
-    group: Optional[str] = "default_group"
 
 
 @app.post("/api/queues/{queue_name}/clear", dependencies=[Depends(get_current_username)])
@@ -229,10 +228,21 @@ def reset_group(queue_name: str, req: QueueAdminRequest):
     """危险：重置消费组游标（放弃当前积压）"""
     if req.password != ADMIN_PASSWORD:
         raise HTTPException(status_code=403, detail="Invalid admin password provided for decisive action.")
-    from qtask.queue import SmartQueue
-    q = SmartQueue(REDIS_URL, queue_name.replace(":stream", ""), worker_group=req.group)
+    
+    # 自动推断 namespace 来定位 group
+    from qtask.queue import SmartQueue, _NS_SET_KEY
+    r = get_redis_client()
+    try:
+        known_ns = r.smembers(_NS_SET_KEY)
+    except:
+        known_ns = set()
+    
+    ns = _detect_namespace(queue_name, known_ns)
+    q_base = queue_name.split(":", 1)[1] if ns and ":" in queue_name else queue_name
+    
+    q = SmartQueue(REDIS_URL, q_base, namespace=ns)
     if q.reset_group():
-        return {"status": "success", "message": f"Cursor for group {req.group} reset"}
+        return {"status": "success", "message": f"Cursor for group {q.worker_group} reset"}
     raise HTTPException(status_code=500, detail="Failed to reset group cursor")
 
 
