@@ -1,25 +1,37 @@
 """qtask CLI — Redis Stream 分布式任务队列运维工具
 
 \b
-概念速查:
-  namespace    项目/任务级命名空间，如 "proj_a"。多台主机 Worker 共享同一 namespace。
-               项目结束后可一键清除该 namespace 下所有数据。
-  queue_name   队列基础名（不含 :stream 后缀）。
-               有 namespace 时格式为 ns:name，如 proj_a:spider:tasks。
-               系统的消费者组和流标识均由 namespace 自动推导管理。
+## 核心概念
+
+  namespace     项目/任务级命名空间，用于分组管理
+  queue_name   队列基础名（不含 :stream 后缀）
+  worker_group  消费者组，由 namespace 自动推导
 
 \b
-常用命令:
-  qtask index proj_a:spider:tasks
-  qtask history proj_a:spider:tasks --status failed --days 7
-  qtask dlq proj_a:spider:tasks --preview
-  qtask ns list
-  qtask ns purge proj_a -f
-  qtask settings set --keep-days 30
+## 快速开始
+
+  # 查看帮助
+  qtask --help
+  qtask <command> --help
+
+  # 常用命令
+  qtask index myproj:spider:tasks              查看队列信息
+  qtask groups myproj:spider:tasks             查看消费者组
+  qtask history myproj:spider:tasks             查看任务历史
+  qtask dlq myproj:spider:tasks --preview      查看死信队列
+  qtask requeue myproj:spider:tasks            重放失败任务
+  qtask ns list                                列出所有 namespace
+  qtask settings show                          查看全局设置
 
 \b
-环境变量:
-  QTASK_REDIS_URL   设置后所有命令无需再传 --redis-url
+## 环境变量
+
+  QTASK_REDIS_URL   Redis 连接 URL，默认 redis://localhost:6379/0
+
+\b
+## 更多信息
+
+  完整文档: 见 CLI_GUIDE.md 文件
 """
 
 import os, sys
