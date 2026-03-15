@@ -1,0 +1,1524 @@
+# 说明
+
+为我review代码
+
+## 文件列表
+
+文件列表如下:
+
+1. `examples/run_generator.py`
+2. `examples/run_scraper.py`
+3. `examples/run_store_result.py`
+4. `qtask/cli.py`
+5. `qtask/history.py`
+6. `qtask/__init__.py`
+7. `qtask/queue.py`
+8. `qtask/storage.py`
+9. `qtask/worker.py`
+
+## 文件内容
+
+各文件内容详见下方:
+
+---
+
+### run_generator.py
+
+文件路径: `examples/run_generator.py`
+
+```python
+"""
+run_generator.py — 生产者示例
+
+将任务推入队列，指定 namespace='stockev' 让所有任务归属同一项目。
+
+namespace 的作用:
+  - Redis key 自动加前缀: stockev:spider:tasks:stream
+  - Dashboard 可按 namespace 过滤/统计
+  - 项目结束后执行 `qtask ns purge stockev -f` 一键清除全部数据
+"""
+
+from qtask import SmartQueue, RemoteStorage
+
+# namespace 标识"这批任务属于哪个项目"
+# 多台主机的 Worker 共享同一 namespace，数据自动归组
+NAMESPACE = "stockev"
+REDIS_URL = "redis://localhost:6379/0"
+
+storage = RemoteStorage("http://127.0.0.1:8000")
+q = SmartQueue(
+    REDIS_URL,
+    "spider:tasks",             # 实际 key: stockev:spider:tasks:stream
+    namespace=NAMESPACE,
+    storage=storage,
+)
+
+for symbol in ["AAPL", "MSFT", "TSLA"]:
+    q.push({"action": "scrape_stock", "symbol": symbol})
+    print(f"Pushed: scrape_stock {symbol}")
+
+print(f"\n查看任务状态:\n  qtask history {NAMESPACE}:spider:tasks")
+print(f"  qtask index {NAMESPACE}:spider:tasks")
+```
+
+### run_scraper.py
+
+文件路径: `examples/run_scraper.py`
+
+```python
+"""
+run_scraper.py — 爬虫 Worker 示例
+
+监听 spider:tasks 队列，将大对象结果推送到 db:tasks 队列。
+
+提示: namespace 作为唯一需要的分组维度:
+  namespace  → 标识"这批任务属于哪个项目" (如 "stockev")
+               只需分配相同的 namespace，多台主机自动被编为同一消费者组协同处理任务。
+               底层的 worker_group 和 worker_id 将自动推导和生成，对用户完全透明。
+
+history 记录问题排查:
+  history 依赖 enable_history=True（默认启用）且 namespace 参数与生产者一致。
+  若不指定 namespace 或与生产者不一致，history key 会对不上，Dashboard 看不到记录。
+"""
+
+from qtask import Worker
+
+NAMESPACE = "stockev"   # 与 run_generator.py 保持一致！
+REDIS_URL = "redis://localhost:6379/0"
+
+worker = Worker(
+    listen_url=REDIS_URL,
+    listen_q_name="spider:tasks",   # 实际 key: stockev:spider:tasks:stream
+    result_url=REDIS_URL,
+    result_q_name="db:tasks",       # 实际 key: stockev:db:tasks:stream
+    storage_url="http://127.0.0.1:8000",
+    namespace=NAMESPACE,            # ← 必须与生产者 namespace 保持一致
+)
+
+
+@worker.on("scrape_stock")
+def handle_scrape(task):
+    """处理爬虫任务，返回大对象由 qtask 自动卸载到 FastAPI 存储"""
+    huge_data = [{"price": 100 + i, "symbol": task["symbol"]} for i in range(100000)]
+    # 返回字典时，qtask 自动将 data 字段存入 FastAPI，在 result_q 留下指针
+    return {
+        "action": "save_stock",
+        "symbol": task["symbol"],
+        "data": huge_data,
+    }
+
+
+if __name__ == "__main__":
+    print(f"Worker started: namespace={NAMESPACE}")
+    print(f"  Listening: {NAMESPACE}:spider:tasks:stream")
+    print(f"  Result  -> {NAMESPACE}:db:tasks:stream")
+    print(f"  Monitor : qtask history {NAMESPACE}:spider:tasks")
+    worker.run()
+```
+
+### run_store_result.py
+
+文件路径: `examples/run_store_result.py`
+
+```python
+"""
+run_store_result.py — 数据库写入 Worker 示例
+
+监听 db:tasks 队列，将爬虫结果入库。
+
+namespace 正确配置后, history 会自动记录本队列的任务统计。
+
+查看历史:
+  qtask history stockev:db:tasks
+  qtask ns info stockev
+"""
+
+from qtask import Worker
+
+NAMESPACE = "stockev"   # 与 run_scraper.py / run_generator.py 保持一致！
+REDIS_URL = "redis://localhost:6379/0"
+
+worker = Worker(
+    listen_url=REDIS_URL,
+    listen_q_name="db:tasks",          # 实际 key: stockev:db:tasks:stream
+    storage_url="http://127.0.0.1:8000",
+    namespace=NAMESPACE,               # ← 必须与上游 Worker 的 namespace 保持一致
+)
+
+
+@worker.on("save_stock")
+def handle_save(task):
+    """处理入库任务，qtask 已自动从 FastAPI 拉取并反序列化了 data 字段"""
+    data = task["data"]
+    print(f"入库股票 {task['symbol']}，数据量 {len(data)}")
+    # 方法返回后，qtask 自动 ACK 并通知 FastAPI 删除临时文件
+
+
+if __name__ == "__main__":
+    print(f"Worker started: namespace={NAMESPACE}")
+    print(f"  Listening: {NAMESPACE}:db:tasks:stream")
+    print(f"  Monitor : qtask history {NAMESPACE}:db:tasks")
+    worker.run()
+```
+
+### cli.py
+
+文件路径: `qtask/cli.py`
+
+```python
+"""qtask CLI — Redis Stream 分布式任务队列运维工具
+
+\b
+概念速查:
+  namespace    项目/任务级命名空间，如 "proj_a"。多台主机 Worker 共享同一 namespace。
+               项目结束后可一键清除该 namespace 下所有数据。
+  queue_name   队列基础名（不含 :stream 后缀）。
+               有 namespace 时格式为 ns:name，如 proj_a:spider:tasks。
+               系统的消费者组和流标识均由 namespace 自动推导管理。
+
+\b
+常用命令:
+  qtask index proj_a:spider:tasks
+  qtask history proj_a:spider:tasks --status failed --days 7
+  qtask dlq proj_a:spider:tasks --preview
+  qtask ns list
+  qtask ns purge proj_a -f
+  qtask settings set --keep-days 30
+
+\b
+环境变量:
+  QTASK_REDIS_URL   设置后所有命令无需再传 --redis-url
+"""
+
+import os, sys
+# 确保 rich/typer help 在任何终端（含伪终端/管道）下都以合理宽度渲染，对 LLM 工具调用友好
+if "COLUMNS" not in os.environ:
+    os.environ["COLUMNS"] = "120"
+
+import typer
+import redis
+from loguru import logger
+
+app = typer.Typer(
+    name="qtask",
+    help=__doc__,
+    no_args_is_help=True,
+    pretty_exceptions_enable=False,
+    context_settings={"max_content_width": 120},
+)
+
+
+REDIS_URL_OPT = typer.Option(
+    "redis://localhost:6379/0", "--redis-url",
+    help="Redis 连接 URL，如 redis://:password@host:6379/0",
+    envvar="QTASK_REDIS_URL",
+)
+
+
+@app.callback()
+def main_callback(
+    ctx: typer.Context,
+    redis_url: str = REDIS_URL_OPT,
+):
+    """
+    初始化全局 Redis 客户端并存储在 context 中。
+    """
+    ctx.obj = get_redis_client(redis_url)
+    ctx.params["redis_url"] = redis_url
+
+
+def get_redis_client(url: str):
+    return redis.from_url(url, decode_responses=True)
+
+# ──────────────────────── 基础队列命令 ────────────────────────
+
+@app.command("index")
+def cmd_index(
+    ctx: typer.Context,
+    queue_name: str = typer.Argument(..., help="队列基础名，含 namespace 前缀时如 proj_a:spider:tasks", metavar="QUEUE"),
+):
+    """查看队列基本信息（长度、最新条目 ID）。"""
+    r = ctx.obj
+    q_name = f"{queue_name}:stream"
+    try:
+        length = r.xlen(q_name)
+        typer.echo(f"Queue  : {q_name}")
+        typer.echo(f"Length : {length} messages")
+        info = r.xinfo_stream(q_name)
+        typer.echo(f"Last ID: {info.get('last-generated-id')}")
+    except redis.exceptions.ResponseError as e:
+        if "no such key" in str(e).lower():
+            typer.echo(f"Queue '{q_name}' does not exist or is empty.")
+        else:
+            typer.echo(f"Error: {e}")
+
+
+@app.command("groups")
+def cmd_groups(
+    ctx: typer.Context,
+    queue_name: str = typer.Argument(..., help="队列基础名", metavar="QUEUE"),
+):
+    """查看队列的所有 Consumer Group（消费者数、Pending 数）。
+
+    Pending 过多代表 Worker 挂死，可用 'qtask claim' 认领僵尸消息。
+    """
+    r = ctx.obj
+    q_name = f"{queue_name}:stream"
+    try:
+        groups = r.xinfo_groups(q_name)
+        if not groups:
+            typer.echo(f"No consumer groups for '{q_name}'.")
+            return
+        for g in groups:
+            typer.echo(f"Group={g.get('name')}  consumers={g.get('consumers')}  pending={g.get('pending')}  last_id={g.get('last-delivered-id')}")
+    except redis.exceptions.ResponseError as e:
+        typer.echo(f"Error: {e}")
+
+
+@app.command("dlq")
+def cmd_dlq(
+    ctx: typer.Context,
+    queue_name: str = typer.Argument(..., help="队列基础名", metavar="QUEUE"),
+    preview: bool = typer.Option(False, "--preview", "-p", help="预览前 5 条失败消息（排查错误原因）"),
+):
+    """查看死信队列（DLQ）——所有处理失败的消息都在这里。
+
+    DLQ 中的消息不会自动重试，需用 'qtask requeue' 手动重放。
+    """
+    r = ctx.obj
+    dlq_name = f"{queue_name}:stream_dlq"
+    try:
+        length = r.xlen(dlq_name)
+        status = "CLEAN" if length == 0 else f"{length} dead letters"
+        typer.echo(f"DLQ: {dlq_name}  [{status}]")
+        if length > 0 and preview:
+            msgs = r.xrange(dlq_name, count=min(length, 5))
+            for msg_id, payload in msgs:
+                typer.echo(f"  {msg_id} -> {payload.get('payload','')[:100]}")
+    except redis.exceptions.ResponseError as e:
+        typer.echo(f"Error: {e}")
+
+
+@app.command("requeue")
+def cmd_requeue(
+    ctx: typer.Context,
+    queue_name: str = typer.Argument(..., help="队列基础名", metavar="QUEUE"),
+    task_id: str = typer.Option(None, "--task-id", "-t", help="指定单条 Stream 消息 ID；省略则重放 DLQ 全部消息"),
+):
+    """将 DLQ 中的失败任务重放回主队列（重试）。
+
+    流程: 排查失败原因 -> 修复代码/数据 -> qtask requeue -> Worker 重新处理。
+    """
+    r = ctx.obj
+    q_name = f"{queue_name}:stream"
+    dlq_name = f"{queue_name}:stream_dlq"
+    try:
+        msgs = r.xrange(dlq_name, min=task_id, max=task_id) if task_id else r.xrange(dlq_name, min="-", max="+")
+        if not msgs:
+            typer.echo("DLQ is empty or task not found.")
+            return
+        pipe = r.pipeline()
+        for msg_id, payload in msgs:
+            if payload.get("payload"):
+                pipe.xadd(q_name, {"payload": payload["payload"]})
+                pipe.xdel(dlq_name, msg_id)
+        pipe.execute()
+        typer.echo(f"Re-queued {len(msgs)} message(s) -> {q_name}")
+    except redis.exceptions.ResponseError as e:
+        typer.echo(f"Error: {e}")
+
+
+@app.command("claim")
+def cmd_claim(
+    ctx: typer.Context,
+    queue_name: str = typer.Argument(..., help="队列基础名，含 namespace 前缀时如 proj_a:spider:tasks", metavar="QUEUE"),
+    idle_ms: int = typer.Option(300000, "--idle-ms", help="只认领超过此毫秒数仍未 ACK 的 Pending 消息（默认 5 分钟）"),
+):
+    """强制认领僵尸 Pending 消息（Worker 宕机后使用）。
+
+    Worker 启动时若设置 auto_claim=True，此操作会自动执行。
+    """
+    from qtask.queue import SmartQueue
+    ns = queue_name.split(":", 1)[0] if ":" in queue_name else ""
+    q_base = queue_name.split(":", 1)[1] if ":" in queue_name else queue_name
+    derived_group = f"{ns}_group" if ns else "default_group"
+    
+    redis_url = ctx.parent.params["redis_url"]
+    q = SmartQueue(redis_url, q_base, namespace=ns)
+    count = q.claim_all(worker_group=derived_group, worker_id="cli-manual", idle_time_ms=idle_ms)
+    typer.echo(f"Claimed {count} zombie message(s) for group '{derived_group}'.")
+
+
+@app.command("reset")
+def cmd_reset(
+    ctx: typer.Context,
+    queue_name: str = typer.Argument(..., help="队列基础名，含 namespace 前缀时如 proj_a:spider:tasks", metavar="QUEUE"),
+    force: bool = typer.Option(False, "--force", "-f", help="跳过确认"),
+):
+    """[危险] 重置消费组游标到最新位置（$），忽略所有积压消息。
+
+    执行后积压消息会被 Worker 跳过，适用于积压数据已无效、需要从现在开始处理的场景。
+    """
+    ns = queue_name.split(":", 1)[0] if ":" in queue_name else ""
+    q_base = queue_name.split(":", 1)[1] if ":" in queue_name else queue_name
+    derived_group = f"{ns}_group" if ns else "default_group"
+
+    if not force:
+        typer.confirm(f"Reset group '{derived_group}' on '{queue_name}'? Backlogged messages will be SKIPPED.", abort=True)
+    from qtask.queue import SmartQueue
+    redis_url = ctx.parent.params["redis_url"]
+    q = SmartQueue(redis_url, q_base, namespace=ns)
+    if q.reset_group(derived_group):
+        typer.echo(f"Group '{derived_group}' cursor reset to latest ($).")
+    else:
+        typer.echo("Failed.")
+
+
+@app.command("clear")
+def cmd_clear(
+    ctx: typer.Context,
+    queue_name: str = typer.Argument(..., help="队列基础名，含 namespace 前缀时如 proj_a:spider:tasks", metavar="QUEUE"),
+    force: bool = typer.Option(False, "--force", "-f", help="跳过确认"),
+    hard: bool = typer.Option(False, "--hard", help="同时清除所有历史记录（Hash + SortedSet），彻底重置"),
+):
+    """[危险] 清空队列（Stream + DLQ）。
+
+    默认保留历史记录（可在 Dashboard 查看）。
+    加 --hard 则连历史一起删，彻底重置，不留任何残留。
+    清除整个项目请用 'qtask ns purge'。
+    """
+    mode = "Stream + DLQ + 历史记录 (--hard)" if hard else "Stream + DLQ"
+    if not force:
+        typer.confirm(f"DANGER: Clear [{mode}] for '{queue_name}'?", abort=True)
+    from qtask.queue import SmartQueue
+    ns = queue_name.split(":", 1)[0] if ":" in queue_name else ""
+    q_base = queue_name.split(":", 1)[1] if ":" in queue_name else queue_name
+    derived_group = f"{ns}_group" if ns else "default_group"
+    
+    redis_url = ctx.parent.params["redis_url"]
+    q = SmartQueue(redis_url, q_base, namespace=ns)
+    if q.clear_all(worker_group=derived_group, clear_history=hard):
+        typer.echo(f"Queue '{queue_name}' cleared (group '{derived_group}' reset)." + (" (history wiped)" if hard else ""))
+    else:
+        typer.echo("Failed.")
+
+
+# ──────────────────────── Namespace 子命令 ────────────────────────
+
+ns_app = typer.Typer(
+    name="ns",
+    help="""管理 namespace（项目/任务级命名空间）。
+
+namespace 是一个 Redis Key 前缀，将同一项目的所有队列归组。
+SmartQueue/Worker 指定 namespace='proj_a' 后，Redis key 自动变为 proj_a:xxx:stream。
+namespace 在首次 push 或 Worker 启动时自动注册，无需手动创建。
+
+purge 操作删除范围:
+  {ns}:*               所有 Stream + DLQ
+  qtask:hist:{ns}:*    所有历史任务 Hash
+  qtask:hist_idx:{ns}:* 所有历史时间索引 SortedSet
+  qtask:ns:{ns}:queues namespace 队列注册元数据
+""",
+    no_args_is_help=True,
+)
+app.add_typer(ns_app, name="ns")
+
+
+@ns_app.command("list")
+def cmd_ns_list(ctx: typer.Context):
+    """列出所有已注册的 namespace 及队列数和历史统计。"""
+    r = ctx.obj
+    from qtask.queue import _NS_SET_KEY, _NS_QUEUES_KEY
+    from qtask.history import TaskHistoryStore
+    namespaces = sorted(r.smembers(_NS_SET_KEY))
+    if not namespaces:
+        typer.echo("No namespaces registered. Create a SmartQueue with namespace='...' to register one.")
+        return
+    typer.echo(f"{'NAMESPACE':<24} {'QUEUES':>6}  {'COMPLETED':>10}  {'FAILED':>7}  {'PENDING':>8}")
+    typer.echo("-" * 60)
+    for ns in namespaces:
+        queues = sorted(r.smembers(_NS_QUEUES_KEY.format(ns=ns)))
+        agg = {"completed": 0, "failed": 0, "pending": 0}
+        for q in queues:
+            try:
+                c = TaskHistoryStore(r, f"{ns}:{q}").count_by_status()
+                for k in agg:
+                    agg[k] += c.get(k, 0)
+            except Exception:
+                pass
+        typer.echo(f"{ns:<24} {len(queues):>6}  {agg['completed']:>10}  {agg['failed']:>7}  {agg['pending']:>8}")
+
+
+@ns_app.command("info")
+def cmd_ns_info(
+    ctx: typer.Context,
+    namespace: str = typer.Argument(..., help="Namespace 名称"),
+):
+    """查看 namespace 下各队列的详细信息（Stream 长度、DLQ 数、历史统计）。"""
+    r = ctx.obj
+    from qtask.queue import _NS_QUEUES_KEY
+    from qtask.history import TaskHistoryStore
+    queues = sorted(r.smembers(_NS_QUEUES_KEY.format(ns=namespace)))
+    if not queues:
+        typer.echo(f"Namespace '{namespace}' not found. Run 'qtask ns list' to see all namespaces.")
+        return
+    typer.echo(f"Namespace: {namespace}  ({len(queues)} queues)")
+    for q in queues:
+        full_q = f"{namespace}:{q}"
+        try:
+            stream_len = r.xlen(f"{full_q}:stream")
+            dlq_len = r.xlen(f"{full_q}:stream_dlq")
+        except Exception:
+            stream_len = dlq_len = 0
+        try:
+            c = TaskHistoryStore(r, full_q).count_by_status()
+        except Exception:
+            c = {}
+        typer.echo(f"  {q}: stream={stream_len} dlq={dlq_len} completed={c.get('completed',0)} failed={c.get('failed',0)} pending={c.get('pending',0)}")
+
+
+@ns_app.command("purge")
+def cmd_ns_purge(
+    ctx: typer.Context,
+    namespace: str = typer.Argument(..., help="要彻底清除的 Namespace 名称"),
+    force: bool = typer.Option(False, "--force", "-f", help="跳过确认（脚本/批量使用）"),
+):
+    """[危险] 彻底清除 namespace 下的所有 Redis 数据（不可逆）。
+
+    删除范围: Stream、DLQ、历史 Hash、历史 SortedSet、注册元数据。
+    """
+    if not force:
+        typer.confirm(f"DANGER: Permanently delete ALL data in namespace '{namespace}'? (irreversible)", abort=True)
+    r = ctx.obj
+    from qtask.queue import SmartQueue
+    deleted = SmartQueue.purge_namespace(r, namespace)
+    typer.echo(f"Namespace '{namespace}' purged: stream_keys={deleted['stream_keys']} history_keys={deleted['history_keys']} meta_keys={deleted['meta_keys']}")
+
+
+# ──────────────────────── History 命令 ────────────────────────
+
+@app.command("history")
+def cmd_history(
+    ctx: typer.Context,
+    queue_name: str = typer.Argument(..., help="队列基础名（如 proj_a:spider:tasks）", metavar="QUEUE"),
+    status: str = typer.Option("all", "--status", "-s", help="状态过滤: all | pending | completed | failed"),
+    days: int = typer.Option(None, "--days", "-d", help="只查最近 N 天（默认使用全局 keep_days 设置）"),
+    limit: int = typer.Option(50, "--limit", "-n", help="最多显示条数（默认 50）"),
+):
+    """查看任务历史记录（状态、重试次数、耗时、失败原因）。
+
+    历史由 Worker 自动记录，按 keep_days 设置懒清理过期数据。
+    修改保留天数: qtask settings set --keep-days 30
+    """
+    r = ctx.obj
+    base_name = queue_name.replace(":stream", "")
+    try:
+        from qtask.history import TaskHistoryStore
+        hist = TaskHistoryStore(r, base_name)
+        keep_days_used = days if days is not None else hist.get_keep_days()
+        tasks = hist.get_tasks(status=status, limit=limit, days=days)
+        counts = hist.count_by_status()
+
+        typer.echo(f"Queue: {base_name}  last={keep_days_used}d  filter={status}  showing={len(tasks)}/{counts['total']}")
+        typer.echo(f"completed={counts['completed']}  failed={counts['failed']}  pending={counts['pending']}")
+        if not tasks:
+            typer.echo("(no records — try adjusting --status or --days)")
+            return
+
+        typer.echo(f"\n{'TASK_ID':<26} {'ACTION':<18} {'STATUS':<11} {'RETRY':>5}  {'TIME':>7}  CREATED")
+        typer.echo("-" * 84)
+        import datetime
+        for t in tasks:
+            st = t.get("status", "?")
+            dur = t.get("duration_s")
+            dur_s = f"{dur:.3f}s" if dur is not None else "      -"
+            cts = t.get("created_at", 0)
+            c_str = datetime.datetime.fromtimestamp(cts).strftime("%m-%d %H:%M:%S") if cts else "-"
+            typer.echo(f"{t.get('task_id','?'):<26} {t.get('action','?'):<18} {st:<11} {int(t.get('retries',0)):>5}  {dur_s:>7}  {c_str}")
+
+        if len(tasks) == limit:
+            typer.echo(f"\n(first {limit} results — use --limit N to see more)")
+    except Exception as e:
+        typer.echo(f"Error: {e}")
+        raise typer.Exit(1)
+
+
+# ──────────────────────── Settings 子命令 ────────────────────────
+
+settings_app = typer.Typer(
+    name="settings",
+    help="""管理 qtask 全局设置（存储在 Redis Hash qtask:settings）。
+
+当前可配置项:
+  history_keep_days   历史记录保留天数（1-365，默认 15）
+                      超期记录在下次写入时懒清理，不影响实时性能。
+""",
+    no_args_is_help=True,
+)
+app.add_typer(settings_app, name="settings")
+
+
+@settings_app.command("show")
+def cmd_settings_show(ctx: typer.Context):
+    """显示当前全局设置。"""
+    r = ctx.obj
+    from qtask.history import DEFAULT_KEEP_DAYS, SETTINGS_KEY
+    raw = r.hgetall(SETTINGS_KEY)
+    keep_days = int(raw.get("history_keep_days", DEFAULT_KEEP_DAYS))
+    typer.echo(f"history_keep_days = {keep_days} days  (redis key: {SETTINGS_KEY})")
+
+
+@settings_app.command("set")
+def cmd_settings_set(
+    ctx: typer.Context,
+    keep_days: int = typer.Option(..., "--keep-days", "-k", help="历史记录保留天数（1-365）"),
+):
+    """设置历史任务保留天数（同 Dashboard -> Settings 面板）。"""
+    if keep_days < 1 or keep_days > 365:
+        typer.echo("Error: keep_days must be between 1 and 365")
+        raise typer.Exit(1)
+    r = ctx.obj
+    from qtask.history import TaskHistoryStore
+    TaskHistoryStore.set_keep_days(r, keep_days)
+    typer.echo(f"history_keep_days set to {keep_days} days.")
+
+
+# ──────────────────────────────────────────────────────────────────
+
+def main():
+    try:
+        app()
+    except Exception as e:
+        logger.error(f"CLI Error: {e}")
+        sys.exit(1)
+
+
+if __name__ == "__main__":
+    main()
+```
+
+### history.py
+
+文件路径: `qtask/history.py`
+
+```python
+"""
+TaskHistoryStore — 基于 Redis Hash + SortedSet 的轻量任务历史层
+
+数据结构：
+  HASH  qtask:hist:{queue}:{task_id}  — 任务详情字段
+  ZSET  qtask:hist_idx:{queue}        — score=created_ts，value=task_id（用于范围查询和过期清理）
+  HASH  qtask:settings                — 全局设置（如 history_keep_days）
+
+任务状态枚举：
+  pending   — 已入队尚未 ACK
+  completed — 已成功 ACK
+  failed    — 已移入 DLQ
+"""
+import time
+import json
+from loguru import logger
+from typing import Optional, List, Dict, Any
+
+DEFAULT_KEEP_DAYS = 15
+SETTINGS_KEY = "qtask:settings"
+
+
+class TaskHistoryStore:
+    """轻量级任务历史记录，依托 Redis，不引入额外数据库"""
+
+    def __init__(self, redis_client, queue_name: str):
+        """
+        :param redis_client: 已初始化的 redis 客户端（decode_responses=True）
+        :param queue_name:   队列基础名称（不含 :stream 后缀），如 "spider:tasks"
+        """
+        self.r = redis_client
+        self.queue_name = queue_name
+        self._hist_prefix = f"qtask:hist:{queue_name}"
+        self._idx_key = f"qtask:hist_idx:{queue_name}"
+        self._stat_key = f"qtask:hist_stat:{queue_name}"
+
+    # ─────────────────────── 写入接口 ───────────────────────
+
+    def record_push(self, task_id: str, action: str, payload_preview: str = ""):
+        """任务入队时调用，状态设为 pending"""
+        now = time.time()
+        key = f"{self._hist_prefix}:{task_id}"
+        self.r.hset(key, mapping={
+            "task_id":        task_id,
+            "queue":          self.queue_name,
+            "action":         action,
+            "status":         "pending",
+            "retries":        0,
+            "payload_preview": payload_preview[:200],  # 只保留截断预览
+            "created_at":     now,
+            "updated_at":     now,
+            "duration_s":     "",
+            "fail_reason":    "",
+        })
+        # 加入时间索引
+        self.r.zadd(self._idx_key, {task_id: now})
+        
+        # 更新状态统计
+        pipe = self.r.pipeline()
+        pipe.hincrby(self._stat_key, "pending", 1)
+        pipe.hincrby(self._stat_key, "total", 1)
+        pipe.execute()
+
+        # 设置 Hash 的 TTL（以 keep_days 为准）以防孤儿 key
+        self._set_hash_ttl(key)
+
+    def record_ack(self, task_id: str, duration_s: float = 0.0):
+        """任务成功 ACK 时调用"""
+        now = time.time()
+        key = f"{self._hist_prefix}:{task_id}"
+        self.r.hset(key, mapping={
+            "status":     "completed",
+            "updated_at": now,
+            "duration_s": round(duration_s, 3),
+        })
+        self._ensure_indexed(task_id, now)
+        # 更新状态统计
+        pipe = self.r.pipeline()
+        pipe.hincrby(self._stat_key, "pending", -1)
+        pipe.hincrby(self._stat_key, "completed", 1)
+        pipe.execute()
+
+    def record_fail(self, task_id: str, reason: str = ""):
+        """任务移入 DLQ 时调用"""
+        now = time.time()
+        key = f"{self._hist_prefix}:{task_id}"
+        self.r.hset(key, mapping={
+            "status":      "failed",
+            "updated_at":  now,
+            "fail_reason": reason[:500],
+        })
+        self._ensure_indexed(task_id, now)
+
+        # 更新状态统计
+        pipe = self.r.pipeline()
+        pipe.hincrby(self._stat_key, "pending", -1)
+        pipe.hincrby(self._stat_key, "failed", 1)
+        pipe.execute()
+
+    def record_retry(self, task_id: str):
+        """每次重试时调用，重试次数 +1"""
+        key = f"{self._hist_prefix}:{task_id}"
+        self.r.hincrby(key, "retries", 1)
+        self.r.hset(key, "updated_at", time.time())
+
+    # ─────────────────────── 查询接口 ───────────────────────
+
+    def get_tasks(
+        self,
+        status: str = "all",
+        limit: int = 100,
+        days: Optional[int] = None,
+    ) -> List[Dict[str, Any]]:
+        """
+        查询历史任务列表。
+
+        :param status: "all" / "pending" / "completed" / "failed"
+        :param limit:  最多返回条数
+        :param days:   只查最近 N 天，None 则用全局 keep_days 设置
+        :return:       任务信息 list（按 created_at 降序）
+        """
+        keep_days = days if days is not None else self.get_keep_days()
+        min_ts = time.time() - keep_days * 86400
+
+        # 从 SortedSet 按时间倒序取出 task_id 列表
+        candidate_ids = self.r.zrevrangebyscore(
+            self._idx_key, "+inf", min_ts, start=0, num=limit * 3  # 多取一些供过滤
+        )
+
+        results = []
+        for tid in candidate_ids:
+            if len(results) >= limit:
+                break
+            key = f"{self._hist_prefix}:{tid}"
+            data = self.r.hgetall(key)
+            if not data:
+                continue
+            if status != "all" and data.get("status") != status:
+                continue
+            # 补偿缺少 record_push 初始化时缺失的字段
+            if "task_id" not in data:
+                data["task_id"] = tid
+            if "action" not in data:
+                data["action"] = "-"
+            
+            # 类型转换
+            data["retries"] = int(data.get("retries", 0))
+            data["updated_at"] = float(data.get("updated_at", 0))
+            data["created_at"] = float(data.get("created_at") or data["updated_at"])
+            data["duration_s"] = float(data["duration_s"]) if data.get("duration_s") else None
+            results.append(data)
+
+        return results
+
+    def count_by_status(self) -> Dict[str, int]:
+        """统计各状态任务数量 (O(1) 查询缓存)"""
+        try:
+            raw = self.r.hgetall(self._stat_key)
+            counts = {
+                "pending": int(raw.get("pending", 0)),
+                "completed": int(raw.get("completed", 0)),
+                "failed": int(raw.get("failed", 0)),
+                "total": int(raw.get("total", 0))
+            }
+            # 容错处理：Redis 计数器可能因为特殊情况不准，这里做简单的非负检查
+            for k in counts:
+                if counts[k] < 0: counts[k] = 0
+            return counts
+        except Exception:
+            # 降级方案（虽然慢，但保证能出结果）
+            return {"pending": 0, "completed": 0, "failed": 0, "total": 0}
+
+    def rebuild_stats(self):
+        """[运维] 重新全量扫描并修正状态统计计数器 (O(N))"""
+        # 慎用，通常只在系统迁移或计数器明显损坏时调用
+        counts = {"pending": 0, "completed": 0, "failed": 0, "total": 0}
+        cursor = 0
+        while True:
+            # 扫描索引中的所有 task_id
+            # 这里为了简化，直接 zrange 索引
+            candidate_ids = self.r.zrange(self._idx_key, 0, -1)
+            for tid in candidate_ids:
+                key = f"{self._hist_prefix}:{tid}"
+                st = self.r.hget(key, "status")
+                if st and st in counts:
+                    counts[st] += 1
+                counts["total"] += 1
+            break # zrange 一次性出结果，如果不大的话。如果很大建议用 zscan
+        
+        # 写入新统计值
+        self.r.delete(self._stat_key)
+        if counts["total"] > 0:
+            self.r.hset(self._stat_key, mapping=counts)
+        return counts
+
+    # ─────────────────────── 清理接口 ───────────────────────
+
+    def cleanup_old(self, keep_days: Optional[int] = None):
+        """删除超过 keep_days 天的历史记录（在写操作时懒触发）"""
+        if keep_days is None:
+            keep_days = self.get_keep_days()
+        cutoff = time.time() - keep_days * 86400
+        # 移除索引中过期的 task_id
+        old_ids = self.r.zrangebyscore(self._idx_key, "-inf", cutoff)
+        if old_ids:
+            pipe = self.r.pipeline()
+            # 批量获取状态，以便准确减去计数器
+            for tid in old_ids:
+                pipe.hget(f"{self._hist_prefix}:{tid}", "status")
+            statuses = pipe.execute()
+
+            pipe = self.r.pipeline()
+            for tid, status in zip(old_ids, statuses):
+                pipe.delete(f"{self._hist_prefix}:{tid}")
+                if status and status in ["pending", "completed", "failed"]:
+                    pipe.hincrby(self._stat_key, status, -1)
+                pipe.hincrby(self._stat_key, "total", -1)
+            
+            pipe.zremrangebyscore(self._idx_key, "-inf", cutoff)
+            pipe.execute()
+        return len(old_ids)
+
+    # ─────────────────────── 设置接口 ───────────────────────
+
+    def get_keep_days(self) -> int:
+        """读取全局 history_keep_days 设置"""
+        try:
+            val = self.r.hget(SETTINGS_KEY, "history_keep_days")
+            return int(val) if val else DEFAULT_KEEP_DAYS
+        except Exception:
+            return DEFAULT_KEEP_DAYS
+
+    @staticmethod
+    def get_keep_days_from_redis(redis_client) -> int:
+        """静态方法：不需要实例化就能读取全局设置"""
+        try:
+            val = redis_client.hget(SETTINGS_KEY, "history_keep_days")
+            return int(val) if val else DEFAULT_KEEP_DAYS
+        except Exception:
+            return DEFAULT_KEEP_DAYS
+
+    @staticmethod
+    def set_keep_days(redis_client, keep_days: int):
+        """全局写入 keep_days 设置"""
+        redis_client.hset(SETTINGS_KEY, "history_keep_days", keep_days)
+
+    # ─────────────────────── 内部工具 ───────────────────────
+
+    def _set_hash_ttl(self, key: str):
+        """根据 keep_days 设置 Hash 的 Redis TTL，防止孤儿 key"""
+        try:
+            keep_days = self.get_keep_days()
+            # 比 keep_days 多一天的 buffer
+            self.r.expire(key, (keep_days + 1) * 86400)
+        except Exception:
+            pass
+
+    def _ensure_indexed(self, task_id: str, ts: float):
+        """
+        确保 task_id 在 SortedSet 索引中存在。
+        解决场景：
+          - 生产者和消费者使用不同 SmartQueue 实例（不同 namespace 配置）
+          - 索引被手动清除后，Worker 继续消费并 ack
+          - record_push 调用在生产者侧，record_ack 在消费者侧
+        用 NX 语义（只在不存在时设置）避免覆盖 record_push 写入的更精确时间
+        """
+        try:
+            # zadd NX: only add if member doesn't already exist
+            self.r.zadd(self._idx_key, {task_id: ts}, nx=True)
+        except Exception:
+            pass
+
+    def get_queue_summary(self) -> Dict[str, Any]:
+        """返回该队列的历史摘要，用于 overview 展示"""
+        counts = self.count_by_status()
+        return {
+            "queue":     self.queue_name,
+            "counts":    counts,
+            "keep_days": self.get_keep_days(),
+        }
+```
+
+### __init__.py
+
+文件路径: `qtask/__init__.py`
+
+```python
+from .queue import SmartQueue
+from .storage import RemoteStorage
+from .worker import Worker
+```
+
+### queue.py
+
+文件路径: `qtask/queue.py`
+
+```python
+try:
+    import ujson as json
+except ImportError:
+    import json
+import time
+import redis
+import socket
+import uuid
+from loguru import logger
+from typing import Tuple, Dict, Any, Optional
+from .storage import RemoteStorage
+from .history import TaskHistoryStore
+
+# Redis keys for namespace registry
+_NS_SET_KEY = "qtask:namespaces"          # Set of all namespace names
+_NS_QUEUES_KEY = "qtask:ns:{ns}:queues"  # Set of queue base-names in a namespace
+
+
+class SmartQueue:
+    """基于 Redis Stream 支持大对象自动卸载和 ACK 机制的队列
+
+    namespace 参数：
+        用于项目级分组（任务所属的命名空间）。指定后队列的 Redis Key 会以
+        {namespace}: 为前缀，例如 namespace="proj_a", queue_name="spider:tasks"
+        → Redis key: proj_a:spider:tasks:stream
+        方便按项目统一查看和清除所有相关数据。
+    """
+
+    def __init__(
+        self,
+        redis_url: str,
+        queue_name: str,
+        storage: Optional[RemoteStorage] = None,
+        large_threshold_bytes: int = 1024 * 50,
+        auto_claim: bool = True,
+        claim_interval: int = 300,
+        history: Optional[TaskHistoryStore] = None,
+        namespace: str = None,             # 项目/任务级命名空间
+        history_store: bool = True,        # 默认自动开启历史记录
+        redis_client: Optional[redis.Redis] = None, # 允许注入连接
+    ):
+        self.redis = redis_client if redis_client is not None else redis.from_url(redis_url, decode_responses=True)
+        self.namespace = namespace or ""
+        self._base_queue_name = queue_name  # 原始队列名（不含 ns 前缀）
+
+        # 实际 Redis key 前缀
+        _prefixed = f"{self.namespace}:{queue_name}" if self.namespace else queue_name
+        self.queue_name = f"{_prefixed}:stream"
+        self._base_name = _prefixed         # 用于构造 DLQ 等
+        self.dlq = f"{_prefixed}:stream_dlq"
+
+        # 注册 namespace 元数据（非阻塞失败不影响主流程）
+        if self.namespace:
+            self._register_namespace()
+
+        self.storage = storage
+        self.large_threshold_bytes = large_threshold_bytes
+        self.auto_claim = auto_claim
+        self.claim_interval = claim_interval
+        self._last_claim_check = 0
+        self._cleanup_counter = 0
+
+        if history:
+            self.history = history
+        elif history_store:
+            from .history import TaskHistoryStore
+            self.history = TaskHistoryStore(self.redis, self._base_name)
+        else:
+            self.history = None
+
+    def _register_namespace(self):
+        """在 Redis 中注册 namespace 和队列的映射关系"""
+        try:
+            pipe = self.redis.pipeline()
+            pipe.sadd(_NS_SET_KEY, self.namespace)
+            pipe.sadd(_NS_QUEUES_KEY.format(ns=self.namespace), self._base_queue_name)
+            pipe.execute()
+        except Exception as e:
+            logger.warning(f"Namespace registration failed (non-critical): {e}")
+
+    def _ensure_group(self, group_name: str):
+        """确保消费组存在"""
+        try:
+            self.redis.xgroup_create(self.queue_name, group_name, id="0", mkstream=True)
+        except redis.exceptions.ResponseError as e:
+            if "already exists" in str(e):
+                return
+            if "no such key" in str(e).lower() or "NOGROUP" in str(e):
+                # 如果 mkstream=True 依然报错（通常是因为 Redis 版本或特殊配置）
+                # 手动通过 XADD 创建流再建组
+                self.redis.xadd(self.queue_name, {"_qtask_init": "1"}, id="*")
+                self.redis.xgroup_create(self.queue_name, group_name, id="0", mkstream=True)
+            else:
+                raise
+
+    def push(self, payload: Dict[str, Any]) -> str:
+        """入队：自动评估体积，拦截大对象，推推入 Stream，返回 msg_id"""
+        payload_json = json.dumps(payload, ensure_ascii=False)
+        data_bytes = payload_json.encode('utf-8')
+        data_len = len(data_bytes)
+
+        if self.storage and data_len > self.large_threshold_bytes:
+            storage_key = self.storage.save_bytes(data_bytes)
+            logger.info(f"Intercepted large payload ({data_len / 1024:.2f} KB). Offloaded to storage key: {storage_key}.")
+            msg = json.dumps({"_qtask_large_payload": True, "storage_key": storage_key})
+        else:
+            msg = payload_json
+
+        msg_id = self.redis.xadd(self.queue_name, {"payload": msg})
+
+        if self.history:
+            try:
+                action = payload.get("action", "unknown")
+                preview = payload_json[:200]
+                self.history.record_push(msg_id, action, preview)
+                
+                # 降频调用清理逻辑（每 100 次入队执行一次）
+                self._cleanup_counter += 1
+                if self._cleanup_counter % 100 == 0:
+                    self.history.cleanup_old()
+            except Exception as e:
+                logger.warning(f"History record_push failed (non-critical): {e}")
+
+        return msg_id
+
+    def pop_blocking(self, worker_group: str, worker_id: str, timeout: int = 10) -> Tuple[Optional[Dict[str, Any]], Optional[Dict[str, str]]]:
+        """出队：使用消费组拉取数据"""
+        self._ensure_group(worker_group)
+
+        # 1. 认领 Zombie 任务
+        if self.auto_claim:
+            now = time.time()
+            if now - self._last_claim_check >= self.claim_interval:
+                self._last_claim_check = now
+                claimed_msg = self._claim_pending_msgs(worker_group, worker_id)
+                if claimed_msg:
+                    return self._process_raw_msg(claimed_msg[0], claimed_msg[1], worker_group=worker_group)
+
+        # 2. 拉取新消息
+        block_ms = timeout * 1000 if timeout > 0 else 0
+        streams = {self.queue_name: ">"}
+        
+        # 使用单个 XREADGROUP 调用替代 while True 循环，
+        # 并通过内部消息处理来维持阻塞行为。
+        while True:
+            try:
+                messages = self.redis.xreadgroup(
+                    worker_group, worker_id, streams, count=1, block=block_ms
+                )
+            except redis.exceptions.ResponseError as e:
+                if "NOGROUP" in str(e):
+                    self._ensure_group(worker_group)
+                    continue
+                raise
+
+            if not messages:
+                # 如果是非阻塞模式且没有消息，或者阻塞超时，则返回 None
+                return None, None
+
+            msg_id, msg_data = messages[0][1][0]
+            # 过滤内部初始化消息
+            if "_qtask_init" in msg_data:
+                self.redis.xack(self.queue_name, worker_group, msg_id)
+                # 如果是阻塞模式，继续循环以等待真实消息
+                if timeout > 0:
+                    continue
+                else:
+                    # 如果是非阻塞模式，且只收到 init 消息，则返回 None
+                    return None, None
+            
+            raw_payload = msg_data.get("payload")
+            return self._process_raw_msg(msg_id, raw_payload, worker_group=worker_group)
+
+    def _claim_pending_msgs(self, worker_group: str, worker_id: str, idle_time_ms: int = 300000) -> Optional[Tuple[str, str]]:
+        """认领僵尸消息。优化：批量扫描并批量认领，提高效率。"""
+        # 虽然 Redis 6.0 没有 XAUTOCLAIM，但我们可以通过脚本或批量 XCLAIM 模拟
+        pending_info = self.redis.xpending_range(
+            self.queue_name, worker_group, min="-", max="+", count=100
+        )
+        if not pending_info:
+            return None
+
+        for pending in pending_info:
+            if pending['time_since_delivered'] > idle_time_ms:
+                msg_id = pending['message_id']
+                # 认领单条并在此立即返回（Worker 每次只处理一条）
+                # 这种方式最符合 Worker 的消费循环
+                claimed = self.redis.xclaim(
+                    self.queue_name, worker_group, worker_id, idle_time_ms, [msg_id]
+                )
+                if claimed:
+                    if self.history:
+                        try:
+                            self.history.record_retry(msg_id)
+                        except Exception:
+                            pass
+                    return claimed[0][0], claimed[0][1].get("payload")
+        return None
+
+    def claim_all(self, worker_group: str, worker_id: str, idle_time_ms: int = 300000) -> int:
+        count = 0
+        while True:
+            pending_info = self.redis.xpending_range(
+                self.queue_name, worker_group, min="-", max="+", count=100
+            )
+            if not pending_info:
+                break
+
+            claimed_ids = [p['message_id'] for p in pending_info if p['time_since_delivered'] > idle_time_ms]
+            if not claimed_ids:
+                break
+
+            # 批量认领
+            claimed = self.redis.xclaim(
+                self.queue_name, worker_group, worker_id, idle_time_ms, claimed_ids
+            )
+            if self.history:
+                for c in claimed:
+                    try:
+                        self.history.record_retry(c[0])
+                    except Exception:
+                        pass
+            count += len(claimed)
+            if len(pending_info) < 100:
+                break
+        return count
+
+    def reset_group(self, worker_group: str):
+        try:
+            self.redis.xgroup_setid(self.queue_name, worker_group, id="$")
+            return True
+        except Exception as e:
+            logger.error(f"Reset group failed: {e}")
+            return False
+
+    def clear_all(self, worker_group: str = "", clear_history: bool = False):
+        """
+        清空队列（Stream + DLQ）。
+        clear_history=True 时同时删除该队列的所有历史记录
+        （qtask:hist:{base}:* 和 qtask:hist_idx:{base}），不留任何残留。
+        """
+        try:
+            pipe = self.redis.pipeline()
+            pipe.delete(self.queue_name)
+            pipe.delete(self.dlq)
+            pipe.execute()
+            
+            if worker_group:
+                self._ensure_group(worker_group)
+            if clear_history:
+                self._purge_history_for_base(self._base_name)
+            return True
+        except Exception as e:
+            logger.error(f"Clear queue failed: {e}")
+            return False
+
+    def _purge_history_for_base(self, base_name: str):
+        """删除单个队列的所有历史 key（Hash + SortedSet + Stat Hash）"""
+        try:
+            pipe = self.redis.pipeline()
+            # 1. 删除 SortedSet（时间索引）和 Stat Hash
+            pipe.delete(f"qtask:hist_idx:{base_name}")
+            pipe.delete(f"qtask:hist_stat:{base_name}")
+            pipe.execute()
+            
+            # 2. 删除所有任务 Hash（scan 防止阻塞）
+            pattern = f"qtask:hist:{base_name}:*"
+            cursor = 0
+            while True:
+                cursor, keys = self.redis.scan(cursor, match=pattern, count=200)
+                if keys:
+                    self.redis.delete(*keys)
+                if cursor == 0:
+                    break
+            logger.debug(f"History purged for {base_name}")
+        except Exception as e:
+            logger.warning(f"_purge_history_for_base failed (non-critical): {e}")
+
+    def _process_raw_msg(self, msg_id: str, raw_payload: str, worker_group: str = "") -> Tuple[Optional[Dict[str, Any]], Optional[Dict[str, str]]]:
+        msg_context = {"msg_id": msg_id, "raw_payload": raw_payload, "_pop_ts": time.time(), "worker_group": worker_group}
+        try:
+            parsed = json.loads(raw_payload)
+            if isinstance(parsed, dict) and parsed.get("_qtask_large_payload"):
+                if not self.storage:
+                    raise ValueError("检测到大对象，但未配置 Storage")
+                real_data_str = self.storage.load(parsed["storage_key"])
+                logger.info(f"[{msg_id}] Loaded large payload from remote storage.")
+                return json.loads(real_data_str), msg_context
+            return parsed, msg_context
+        except Exception as e:
+            logger.error(f"Failed to process raw message {msg_id}: {e}")
+            self._move_to_dlq(msg_context, worker_group=worker_group, reason=str(e))
+            return None, None
+
+    def ack(self, msg_context: Dict[str, str]):
+        msg_id = msg_context["msg_id"]
+        raw_payload = msg_context["raw_payload"]
+        worker_group = msg_context.get("worker_group", "")
+        pop_ts = msg_context.get("_pop_ts", time.time())
+
+        if not worker_group:
+            raise ValueError("ACK requires worker_group in msg_context")
+
+        try:
+            self.redis.xack(self.queue_name, worker_group, msg_id)
+        except redis.exceptions.ResponseError as e:
+            if "NOGROUP" in str(e):
+                self._ensure_group(worker_group)
+                self.redis.xack(self.queue_name, worker_group, msg_id)
+            else:
+                raise
+
+        try:
+            parsed = json.loads(raw_payload)
+            if isinstance(parsed, dict) and parsed.get("_qtask_large_payload") and self.storage:
+                self.storage.delete(parsed["storage_key"])
+        except Exception:
+            pass
+
+        if self.history:
+            try:
+                self.history.record_ack(msg_id, time.time() - pop_ts)
+            except Exception as e:
+                logger.warning(f"History record_ack failed (non-critical): {e}")
+
+    def fail(self, msg_context: Dict[str, str], reason: str = ""):
+        worker_group = msg_context.get("worker_group", "")
+        self._move_to_dlq(msg_context, reason=reason, worker_group=worker_group)
+
+    def _move_to_dlq(self, msg_context: Dict[str, str], reason: str = "", worker_group: str = ""):
+        msg_id = msg_context.get("msg_id")
+        raw_payload = msg_context.get("raw_payload")
+        if not msg_id:
+            return
+        
+        target_group = worker_group or msg_context.get("worker_group", "")
+
+        try:
+            # DLQ 消息中增加更多上下文
+            dlq_payload = {
+                "payload": raw_payload,
+                "original_id": msg_id,
+                "fail_reason": reason[:1000],
+                "failed_at": time.time(),
+                "worker_group": target_group
+            }
+            self.redis.xadd(self.dlq, {"payload": json.dumps(dlq_payload, ensure_ascii=False)})
+            
+            if target_group:
+                self.redis.xack(self.queue_name, target_group, msg_id)
+        except Exception as e:
+            logger.error(f"Failed to move message {msg_id} to DLQ: {e}")
+
+        if self.history:
+            try:
+                self.history.record_fail(msg_id, reason or "moved to DLQ")
+            except Exception as e:
+                logger.warning(f"History record_fail failed (non-critical): {e}")
+
+    @staticmethod
+    def list_namespaces(redis_client) -> list:
+        """列出 Redis 中注册的所有 namespace"""
+        try:
+            return sorted(redis_client.smembers(_NS_SET_KEY))
+        except Exception:
+            return []
+
+    @staticmethod
+    def get_namespace_queues(redis_client, namespace: str) -> list:
+        """获取某 namespace 下注册的所有队列名（不含前缀）"""
+        try:
+            return sorted(redis_client.smembers(_NS_QUEUES_KEY.format(ns=namespace)))
+        except Exception:
+            return []
+
+    @staticmethod
+    def purge_namespace(redis_client, namespace: str) -> Dict[str, int]:
+        """
+        危险操作：彻底清除 namespace 下的所有数据。
+        涵盖：Stream（含 DLQ）、历史记录 Hash、历史时间索引 SortedSet、状态计数器、注册元数据。
+        """
+        deleted = {"stream_keys": 0, "history_keys": 0, "meta_keys": 0}
+        try:
+            def _scan_delete(pattern):
+                """扫描并批量删除匹配 pattern 的 key，返回删除数量"""
+                cursor = 0
+                total = 0
+                while True:
+                    cursor, keys = redis_client.scan(cursor, match=pattern, count=200)
+                    if keys:
+                        redis_client.delete(*keys)
+                        total += len(keys)
+                    if cursor == 0:
+                        break
+                return total
+
+            # 1. Stream + DLQ key：{ns}:*
+            deleted["stream_keys"] = _scan_delete(f"{namespace}:*")
+
+            # 2. 历史 Hash：qtask:hist:{ns}:*
+            n_hist = _scan_delete(f"qtask:hist:{namespace}:*")
+
+            # 3. 历史时间索引和状态计数器：qtask:hist_idx:{ns}:* 和 qtask:hist_stat:{ns}:*
+            idx_pattern = f"qtask:hist_idx:{namespace}:*"
+            stat_pattern = f"qtask:hist_stat:{namespace}:*"
+            n_idx = _scan_delete(idx_pattern)
+            n_stat = _scan_delete(stat_pattern)
+
+            deleted["history_keys"] = n_hist + n_idx + n_stat
+
+            # 4. namespace 注册元数据
+            pipe = redis_client.pipeline()
+            pipe.delete(_NS_QUEUES_KEY.format(ns=namespace))
+            pipe.srem(_NS_SET_KEY, namespace)
+            pipe.execute()
+            deleted["meta_keys"] = 1
+
+        except Exception as e:
+            logger.error(f"purge_namespace failed: {e}")
+        return deleted
+```
+
+### storage.py
+
+文件路径: `qtask/storage.py`
+
+```python
+import io
+import requests
+from typing import Optional, Union
+
+class RemoteStorage:
+    """基于 FastAPI 的远程对象存储客户端"""
+    
+    def __init__(self, api_base_url: str):
+        self.api_base_url = api_base_url.rstrip('/')
+        self.session = requests.Session()
+        
+        # 配置重试逻辑和连接池
+        from urllib3.util.retry import Retry
+        from requests.adapters import HTTPAdapter
+        retries = Retry(total=3, backoff_factor=0.5, status_forcelist=[500, 502, 503, 504])
+        adapter = HTTPAdapter(max_retries=retries, pool_connections=10, pool_maxsize=10)
+        self.session.mount('http://', adapter)
+        self.session.mount('https://', adapter)
+        
+    def save(self, data_str: str) -> str:
+        """上传大字符串，返回唯一 Key"""
+        return self.save_bytes(data_str.encode('utf-8'))
+        
+    def save_bytes(self, data_bytes: bytes) -> str:
+        """上传二进制数据。Requests 内部支持直接发送 bytes，减少不必要的内存复制。"""
+        url = f"{self.api_base_url}/api/storage/upload"
+        # 直接传入 bytes 作为文件内容，不需要 io.BytesIO 包装
+        files = {'file': ('data.json', data_bytes, 'application/json')}
+        
+        response = self.session.post(url, files=files, timeout=(3, 30))
+        response.raise_for_status()
+        return response.json()["key"]
+        
+    def load(self, key: str) -> str:
+        """下载并读取内容"""
+        url = f"{self.api_base_url}/api/storage/download/{key}"
+        response = self.session.get(url, timeout=(3, 30))
+        response.raise_for_status()
+        return response.content.decode('utf-8')
+            
+    def delete(self, key: str) -> bool:
+        """删除远程文件"""
+        url = f"{self.api_base_url}/api/storage/delete/{key}"
+        try:
+            response = self.session.delete(url, timeout=(3, 30))
+            return response.status_code == 200
+        except requests.RequestException:
+            return False
+```
+
+### worker.py
+
+文件路径: `qtask/worker.py`
+
+```python
+import uuid
+import socket
+import traceback
+import time
+import signal
+import redis as redis_lib
+from loguru import logger
+from typing import Callable, Optional
+from .queue import SmartQueue
+from .storage import RemoteStorage
+from .history import TaskHistoryStore
+
+class Worker:
+    """任务执行调度器
+
+    namespace 参数：
+        项目/任务级命名空间。
+        同一 namespace 的多个 Worker 会自动编为一个消费者组，共享任务负载。
+        这是在不暴露底层技术概念的情况下，唯一需要配置的分组标识。
+    """
+
+
+    def __init__(
+        self,
+        listen_url: str,
+        listen_q_name: str,
+        result_url: Optional[str] = None,
+        result_q_name: Optional[str] = None,
+        storage_url: Optional[str] = None,
+        auto_claim: bool = True,
+        claim_interval: int = 300,
+        enable_history: bool = True,
+        namespace: str = None,             # 项目/任务级命名空间
+    ):
+        self.namespace = namespace or ""
+        self.storage = RemoteStorage(storage_url) if storage_url else None
+
+        # 核心：共享同一个 Redis 连接池
+        self.redis_client = redis_lib.from_url(listen_url, decode_responses=True)
+
+        # worker_group/worker_id 由 Worker 层管理
+        self.worker_group = f"{self.namespace}_group" if self.namespace else "default_group"
+        _hostname = socket.gethostname().split('.')[0][:12]
+        self.worker_id = f"{_hostname}-{uuid.uuid4().hex[:6]}"
+
+        self.listen_q = SmartQueue(
+            listen_url, listen_q_name,
+            storage=self.storage,
+            auto_claim=auto_claim,
+            claim_interval=claim_interval,
+            namespace=namespace,
+            history=None,
+            history_store=enable_history,
+            redis_client=self.redis_client, # 注入共享连接
+        )
+
+        if result_url and result_q_name:
+            # 如果结果队列在同一个 Redis，复用连接；否则按需创建新连接
+            res_client = self.redis_client if result_url == listen_url else None
+            self.result_q = SmartQueue(
+                result_url, result_q_name,
+                storage=self.storage,
+                auto_claim=auto_claim,
+                claim_interval=claim_interval,
+                namespace=namespace,
+                history=None,
+                history_store=enable_history,
+                redis_client=res_client,
+            )
+        else:
+            self.result_q = None
+
+        self.handlers = {}
+        
+        # 优雅退出支持
+        self.running = True
+        signal.signal(signal.SIGINT, self._handle_exit)
+        signal.signal(signal.SIGTERM, self._handle_exit)
+
+    def _handle_exit(self, sig, frame):
+        logger.info(f"Signal {sig} received. Gracefully shutting down...")
+        self.running = False
+
+    def on(self, action_name: str) -> Callable:
+        """路由装饰器"""
+        def decorator(func: Callable):
+            self.handlers[action_name] = func
+            return func
+        return decorator
+
+    def run(self):
+        ns_tag = f"[ns={self.namespace}] " if self.namespace else ""
+        logger.info(f"Worker [{self.worker_id}] {ns_tag}in Group [{self.worker_group}] Started.")
+        logger.info(f"Listening on Queue: {self.listen_q.queue_name}")
+        
+        while self.running:
+            msg_context = None
+            try:
+                # 1. 尝试拉取任务
+                payload, msg_context = self.listen_q.pop_blocking(self.worker_group, self.worker_id)
+                if not payload:
+                    continue
+
+                # 2. 如果拉到了任务，即使此时收到退出信号，也必须完整处理完当前任务
+                action = payload.get("action", "unknown_action")
+                msg_id = msg_context.get("msg_id") if msg_context else "unknown_id"
+
+                logger.info(f"[{msg_id}] Received Task -> Action: {action}")
+                handler = self.handlers.get(action)
+
+                if not handler:
+                    logger.warning(f"[{msg_id}] Unknown action: {action}. Failing task.")
+                    if msg_context:
+                        self.listen_q.fail(msg_context, reason=f"No handler for action: {action}")
+                    continue
+
+                t_start = time.time()
+                result_payload = handler(payload)
+                t_cost = time.time() - t_start
+
+                if result_payload and self.result_q:
+                    self.result_q.push(result_payload)
+                    logger.info(f"[{msg_id}] Task completed in {t_cost:.3f}s. Result pushed to {self.result_q.queue_name}.")
+                else:
+                    logger.info(f"[{msg_id}] Task completed in {t_cost:.3f}s. (No return payload)")
+
+                self.listen_q.ack(msg_context)
+
+            except Exception as e:
+                # 如果是运行中异常，记录日志并 fail
+                if self.running:
+                    logger.error(f"Task Failed: {e}\n{traceback.format_exc()}")
+                    if msg_context:
+                        self.listen_q.fail(msg_context, reason=str(e))
+                else:
+                    # 如果是因为收到信号导致的异常（如阻塞被中断），直接退出
+                    break
+        
+        logger.info(f"Worker [{self.worker_id}] stopped cleanly.")
+```
+

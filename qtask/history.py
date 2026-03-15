@@ -48,29 +48,29 @@ class TaskHistoryStore:
         """任务入队时调用，状态设为 pending"""
         now = time.time()
         key = f"{self._hist_prefix}:{task_id}"
-        self.r.hset(key, mapping={
+        
+        # 使用 pipeline 原子执行所有写入操作
+        pipe = self.r.pipeline()
+        pipe.hset(key, mapping={
             "task_id":        task_id,
             "queue":          self.queue_name,
             "action":         action,
             "status":         "pending",
             "retries":        0,
-            "payload_preview": payload_preview[:200],  # 只保留截断预览
+            "payload_preview": payload_preview[:200],
             "created_at":     now,
             "updated_at":     now,
             "duration_s":     "",
             "fail_reason":    "",
         })
-        # 加入时间索引
-        self.r.zadd(self._idx_key, {task_id: now})
-        
-        # 更新状态统计
-        pipe = self.r.pipeline()
+        pipe.zadd(self._idx_key, {task_id: now})
         pipe.hincrby(self._stat_key, "pending", 1)
         pipe.hincrby(self._stat_key, "total", 1)
+        
+        keep_days = self.get_keep_days()
+        pipe.expire(key, (keep_days + 1) * 86400)
+        
         pipe.execute()
-
-        # 设置 Hash 的 TTL（以 keep_days 为准）以防孤儿 key
-        self._set_hash_ttl(key)
 
     def record_ack(self, task_id: str, duration_s: float = 0.0):
         """任务成功 ACK 时调用"""

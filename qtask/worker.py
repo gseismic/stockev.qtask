@@ -99,6 +99,7 @@ class Worker:
                 # 1. 尝试拉取任务
                 payload, msg_context = self.listen_q.pop_blocking(self.worker_group, self.worker_id)
                 if not payload:
+                    logger.debug("No message received, continuing...")
                     continue
 
                 # 2. 如果拉到了任务，即使此时收到退出信号，也必须完整处理完当前任务

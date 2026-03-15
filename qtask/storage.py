@@ -62,5 +62,6 @@ class RemoteStorage:
         try:
             response = self.session.delete(url, timeout=(3, 30))
             return response.status_code == 200
-        except RequestException:
+        except RequestException as e:
+            logger.error(f"Storage delete failed for key {key}: {e}")
             return False

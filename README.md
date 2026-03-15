@@ -144,6 +144,7 @@ worker = Worker(
     namespace="stockev",                   # 必须与生产者一致！
     storage_url="http://localhost:8000",   # 对应 FastAPI 存储服务
     auto_claim=True,                       # 自动认领 Zombie 任务
+    claim_interval=300,                    # 认领检查间隔（秒）
 )
 
 @worker.on("scrape_stock")
