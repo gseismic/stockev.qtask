@@ -19,11 +19,11 @@ class RemoteStorage:
         self.session.mount('http://', adapter)
         self.session.mount('https://', adapter)
         
-    def save(self, data_str: str, unique_key: str = None) -> str:
+    def save(self, data_str: str, unique_key: Optional[str] = None) -> str:
         """上传大字符串，返回唯一 Key"""
         return self.save_bytes(data_str.encode('utf-8'), unique_key=unique_key)
         
-    def save_bytes(self, data_bytes: bytes, unique_key: str = None) -> str:
+    def save_bytes(self, data_bytes: bytes, unique_key: Optional[str] = None) -> str:
         """上传二进制数据。Requests 内部支持直接发送 bytes，减少不必要的内存复制。"""
         url = f"{self.api_base_url}/api/storage/upload"
         files = {'file': ('data.json', data_bytes, 'application/json')}
@@ -62,5 +62,5 @@ class RemoteStorage:
         try:
             response = self.session.delete(url, timeout=(3, 30))
             return response.status_code == 200
-        except requests.RequestException:
+        except RequestException:
             return False
