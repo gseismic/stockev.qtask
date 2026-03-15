@@ -445,6 +445,71 @@ def cmd_settings_set(
     typer.echo(f"history_keep_days set to {keep_days} days.")
 
 
+# ──────────────────────── Server 子命令 ────────────────────────
+
+@app.command("server")
+def cmd_server(
+    port: int = typer.Option(8000, "--port", "-p", help="服务器端口"),
+    host: str = typer.Option("0.0.0.0", "--host", "-h", help="服务器主机"),
+    log_level: str = typer.Option("info", "--log-level", "-l", help="日志级别 (debug/info/warning/error)"),
+):
+    """启动 qtask 存储服务器 (FastAPI)。"""
+    import os
+    import sys
+    import subprocess
+
+    # 检查必需的环境变量
+    admin_user = os.environ.get("QTASK_ADMIN_USER")
+    admin_pass = os.environ.get("QTASK_ADMIN_PASS")
+    admin_token = os.environ.get("QTASK_ADMIN_TOKEN")
+
+    if not admin_user or not admin_pass or not admin_token:
+        typer.echo("Error: 必需的环境变量未设置:")
+        typer.echo("  QTASK_ADMIN_USER  - Dashboard 用户名")
+        typer.echo("  QTASK_ADMIN_PASS  - Dashboard 密码")
+        typer.echo("  QTASK_ADMIN_TOKEN - API Token")
+        typer.echo("\n示例:")
+        typer.echo("  export QTASK_ADMIN_USER=admin QTASK_ADMIN_PASS=pass123 QTASK_ADMIN_TOKEN=mytoken")
+        typer.echo("  qtask server")
+        raise typer.Exit(1)
+
+    # 查找 storage_server.py 位置
+    import importlib.util
+    spec = importlib.util.find_spec("qtask")
+    if spec and spec.origin:
+        server_dir = os.path.dirname(os.path.dirname(spec.origin))
+    else:
+        server_dir = os.getcwd()
+
+    server_path = os.path.join(server_dir, "server", "storage_server.py")
+    if not os.path.exists(server_path):
+        typer.echo(f"Error: 找不到 storage_server.py ({server_path})")
+        raise typer.Exit(1)
+
+    typer.echo(f"启动 qtask 存储服务器...")
+    typer.echo(f"  Host: {host}:{port}")
+    typer.echo(f"  Log:  {log_level}")
+    typer.echo(f"  访问 http://localhost:{port}/dashboard")
+    typer.echo(f"\n按 Ctrl+C 停止服务器\n")
+
+    # 使用 subprocess 运行
+    env = os.environ.copy()
+    env["LOGURU_LEVEL"] = log_level.upper()
+    
+    cmd = [
+        sys.executable, "-m", "uvicorn",
+        "storage_server:app",
+        "--host", host,
+        "--port", str(port),
+        "--log-level", log_level.lower(),
+    ]
+    
+    try:
+        subprocess.run(cmd, cwd=os.path.join(server_dir, "server"), env=env)
+    except KeyboardInterrupt:
+        typer.echo("\n服务器已停止")
+
+
 # ──────────────────────────────────────────────────────────────────
 
 def main():
