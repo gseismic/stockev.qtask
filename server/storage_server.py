@@ -3,6 +3,7 @@ import uuid
 import psutil
 import redis
 import json
+import logging
 from fastapi import FastAPI, UploadFile, File, Form, HTTPException, Depends
 from fastapi.responses import FileResponse, HTMLResponse
 from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
@@ -10,13 +11,19 @@ from pydantic import BaseModel
 from typing import Dict, Any, Optional, List
 import aiofiles
 
+logger = logging.getLogger("qtask.storage_server")
+
 app = FastAPI(title="qtask Storage & Monitoring", description="qtask大对象存储服务与监控台")
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/api/login")
 
-ADMIN_USERNAME = os.environ.get("QTASK_ADMIN_USER", "admin")
-ADMIN_PASSWORD = os.environ.get("QTASK_ADMIN_PASS", "admin123")
+ADMIN_USERNAME = os.environ.get("QTASK_ADMIN_USER")
+ADMIN_PASSWORD = os.environ.get("QTASK_ADMIN_PASS")
+ADMIN_TOKEN = os.environ.get("QTASK_ADMIN_TOKEN")
+if not ADMIN_USERNAME or not ADMIN_PASSWORD:
+    raise ValueError("QTASK_ADMIN_USER and QTASK_ADMIN_PASS environment variables must be set")
+if not ADMIN_TOKEN:
+    raise ValueError("QTASK_ADMIN_TOKEN environment variable must be set")
 REDIS_URL = os.environ.get("QTASK_REDIS_URL", "redis://localhost:6379/0")
-FAKE_TOKEN = "qtask_super_secret_token"
 
 # ── Redis key constants (must match queue.py) ──
 _NS_SET_KEY = "qtask:namespaces"
@@ -48,12 +55,12 @@ def health_check():
 @app.post("/api/login")
 def login(form_data: OAuth2PasswordRequestForm = Depends()):
     if form_data.username == ADMIN_USERNAME and form_data.password == ADMIN_PASSWORD:
-        return {"access_token": FAKE_TOKEN, "token_type": "bearer"}
+        return {"access_token": ADMIN_TOKEN, "token_type": "bearer"}
     raise HTTPException(status_code=400, detail="Incorrect username or password")
 
 
 def get_current_username(token: str = Depends(oauth2_scheme)):
-    if token != FAKE_TOKEN:
+    if token != ADMIN_TOKEN:
         raise HTTPException(status_code=401, detail="Invalid token")
     return ADMIN_USERNAME
 
@@ -82,17 +89,35 @@ async def upload_file(file: UploadFile = File(...)):
     """上传大对象文件，返回唯一 Key"""
     file_id = uuid.uuid4().hex
     file_path = os.path.join(STORAGE_DIR, file_id)
-    async with aiofiles.open(file_path, 'wb') as out_file:
-        while content := await file.read(1024 * 1024):
-            await out_file.write(content)
-    return {"status": "uploaded", "key": file_id}
+    try:
+        async with aiofiles.open(file_path, 'wb') as out_file:
+            while content := await file.read(1024 * 1024):
+                await out_file.write(content)
+        return {"status": "uploaded", "key": file_id}
+    except Exception:
+        if os.path.exists(file_path):
+            os.remove(file_path)
+        raise
+
+
+def _validate_file_id(file_id: str) -> None:
+    """验证 file_id 防止路径遍历攻击"""
+    if not file_id:
+        raise HTTPException(status_code=400, detail="Invalid file_id")
+    # 检查常见路径遍历模式
+    dangerous_patterns = ["..", "/", "\\", "~"]
+    for pattern in dangerous_patterns:
+        if pattern in file_id:
+            raise HTTPException(status_code=400, detail="Invalid file_id")
+    # 检查绝对路径或 URL 编码
+    if file_id.startswith("/") or "%2f" in file_id.lower() or "%5c" in file_id.lower():
+        raise HTTPException(status_code=400, detail="Invalid file_id")
 
 
 @app.get("/api/storage/download/{file_id}")
 async def download_file(file_id: str):
     """下载大对象文件"""
-    if ".." in file_id or "/" in file_id:
-        raise HTTPException(status_code=400, detail="Invalid file_id")
+    _validate_file_id(file_id)
     file_path = os.path.join(STORAGE_DIR, file_id)
     if not os.path.exists(file_path):
         raise HTTPException(status_code=404, detail="File not found")
@@ -102,13 +127,13 @@ async def download_file(file_id: str):
 @app.delete("/api/storage/delete/{file_id}")
 async def delete_file(file_id: str):
     """删除大对象文件"""
-    if ".." in file_id or "/" in file_id:
-        raise HTTPException(status_code=400, detail="Invalid file_id")
+    _validate_file_id(file_id)
     file_path = os.path.join(STORAGE_DIR, file_id)
-    if os.path.exists(file_path):
+    try:
         os.remove(file_path)
         return {"status": "deleted"}
-    return {"status": "not_found"}
+    except FileNotFoundError:
+        return {"status": "not_found"}
 
 
 # ============ Namespace API ============
@@ -200,8 +225,8 @@ def requeue_dlq(queue_name: str, req: RequeueRequest = None):
             hist = TaskHistoryStore(r, base_name)
             for msg_id, payload in msgs:
                 hist.record_retry(payload.get("original_id", msg_id))
-        except Exception:
-            pass
+        except Exception as e:
+            logger.warning(f"Failed to record retry history: {e}")
         return {"status": "success", "requeued": len(msgs)}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
@@ -220,7 +245,7 @@ def clear_queue(queue_name: str, req: QueueAdminRequest):
     r = get_redis_client()
     try:
         known_ns = r.smembers(_NS_SET_KEY)
-    except:
+    except Exception:
         known_ns = set()
     ns = _detect_namespace(queue_name, known_ns)
     q_base = queue_name.split(":", 1)[1] if ns and ":" in queue_name else queue_name.replace(":stream", "")
@@ -243,11 +268,11 @@ def reset_group(queue_name: str, req: QueueAdminRequest):
     r = get_redis_client()
     try:
         known_ns = r.smembers(_NS_SET_KEY)
-    except:
+    except Exception:
         known_ns = set()
     
     ns = _detect_namespace(queue_name, known_ns)
-    q_base = queue_name.split(":", 1)[1] if ns and ":" in queue_name else queue_name
+    q_base = queue_name.split(":", 1)[1] if ns and ":" in queue_name else queue_name.replace(":stream", "")
     
     wg = f"{ns}_group" if ns else "default_group"
     q = SmartQueue(REDIS_URL, q_base, namespace=ns)
@@ -425,7 +450,13 @@ def get_system_stats():
         known_namespaces = set()
 
     try:
-        keys = [k for k in r.keys("*:stream") if not k.endswith("_dlq")]
+        keys = []
+        cursor = 0
+        while True:
+            cursor, batch = r.scan(cursor, match="*:stream", count=1000)
+            keys.extend([k for k in batch if not k.endswith("_dlq")])
+            if cursor == 0:
+                break
         from qtask.history import TaskHistoryStore
         for k in keys:
             dlq_k = f"{k.replace(':stream', '')}:stream_dlq"
