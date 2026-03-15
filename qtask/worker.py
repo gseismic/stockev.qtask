@@ -2,6 +2,7 @@ import uuid
 import socket
 import traceback
 import time
+import signal
 import redis as redis_lib
 from loguru import logger
 from typing import Callable, Optional
@@ -18,6 +19,7 @@ class Worker:
         这是在不暴露底层技术概念的情况下，唯一需要配置的分组标识。
     """
 
+
     def __init__(
         self,
         listen_url: str,
@@ -33,19 +35,13 @@ class Worker:
         self.namespace = namespace or ""
         self.storage = RemoteStorage(storage_url) if storage_url else None
 
-        # 初始化 TaskHistoryStore（共享同一个 Redis 连接）
-        _history_client = None
-        if enable_history:
-            try:
-                _history_client = redis_lib.from_url(listen_url, decode_responses=True)
-            except Exception as e:
-                logger.warning(f"Failed to init history Redis client: {e}")
+        # 核心：共享同一个 Redis 连接池
+        self.redis_client = redis_lib.from_url(listen_url, decode_responses=True)
 
-        def _make_history(q_name_with_ns: str) -> Optional[TaskHistoryStore]:
-            """q_name_with_ns 是加过 namespace 前缀的队列基础名"""
-            if _history_client is None:
-                return None
-            return TaskHistoryStore(_history_client, q_name_with_ns)
+        # worker_group/worker_id 由 Worker 层管理
+        self.worker_group = f"{self.namespace}_group" if self.namespace else "default_group"
+        _hostname = socket.gethostname().split('.')[0][:12]
+        self.worker_id = f"{_hostname}-{uuid.uuid4().hex[:6]}"
 
         self.listen_q = SmartQueue(
             listen_url, listen_q_name,
@@ -53,16 +49,14 @@ class Worker:
             auto_claim=auto_claim,
             claim_interval=claim_interval,
             namespace=namespace,
-            history=None,  # 先建队列让 ns 前缀生效，再用实际名创建 history
-            history_store=False, # 防止默认开启创建重复的实体
+            history=None,
+            history_store=enable_history,
+            redis_client=self.redis_client, # 注入共享连接
         )
-        # 用加过 ns 前缀的实际基础名（不含 :stream）创建 history
-        self.listen_q.history = _make_history(self.listen_q._base_name)
-        
-        self.worker_id = self.listen_q.worker_id
-        self.worker_group = self.listen_q.worker_group
 
         if result_url and result_q_name:
+            # 如果结果队列在同一个 Redis，复用连接；否则按需创建新连接
+            res_client = self.redis_client if result_url == listen_url else None
             self.result_q = SmartQueue(
                 result_url, result_q_name,
                 storage=self.storage,
@@ -70,13 +64,22 @@ class Worker:
                 claim_interval=claim_interval,
                 namespace=namespace,
                 history=None,
-                history_store=False,
+                history_store=enable_history,
+                redis_client=res_client,
             )
-            self.result_q.history = _make_history(self.result_q._base_name)
         else:
             self.result_q = None
 
         self.handlers = {}
+        
+        # 优雅退出支持
+        self.running = True
+        signal.signal(signal.SIGINT, self._handle_exit)
+        signal.signal(signal.SIGTERM, self._handle_exit)
+
+    def _handle_exit(self, sig, frame):
+        logger.info(f"Signal {sig} received. Gracefully shutting down...")
+        self.running = False
 
     def on(self, action_name: str) -> Callable:
         """路由装饰器"""
@@ -87,15 +90,18 @@ class Worker:
 
     def run(self):
         ns_tag = f"[ns={self.namespace}] " if self.namespace else ""
-        logger.info(f"Worker [{self.worker_id}] {ns_tag}in Group [{self.listen_q.worker_group}] Started.")
+        logger.info(f"Worker [{self.worker_id}] {ns_tag}in Group [{self.worker_group}] Started.")
         logger.info(f"Listening on Queue: {self.listen_q.queue_name}")
-        while True:
+        
+        while self.running:
             msg_context = None
             try:
-                payload, msg_context = self.listen_q.pop_blocking()
+                # 1. 尝试拉取任务
+                payload, msg_context = self.listen_q.pop_blocking(self.worker_group, self.worker_id)
                 if not payload:
                     continue
 
+                # 2. 如果拉到了任务，即使此时收到退出信号，也必须完整处理完当前任务
                 action = payload.get("action", "unknown_action")
                 msg_id = msg_context.get("msg_id") if msg_context else "unknown_id"
 
@@ -121,6 +127,13 @@ class Worker:
                 self.listen_q.ack(msg_context)
 
             except Exception as e:
-                logger.error(f"Task Failed: {e}\n{traceback.format_exc()}")
-                if msg_context:
-                    self.listen_q.fail(msg_context, reason=str(e))
+                # 如果是运行中异常，记录日志并 fail
+                if self.running:
+                    logger.error(f"Task Failed: {e}\n{traceback.format_exc()}")
+                    if msg_context:
+                        self.listen_q.fail(msg_context, reason=str(e))
+                else:
+                    # 如果是因为收到信号导致的异常（如阻塞被中断），直接退出
+                    break
+        
+        logger.info(f"Worker [{self.worker_id}] stopped cleanly.")

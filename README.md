@@ -44,15 +44,14 @@
 ## 架构总览
 
 ```
-Producer(s)           Redis Stream             Worker(s)
-─────────────         ─────────────            ─────────────
-SmartQueue.push()  →  queue:stream         ←   SmartQueue.pop_blocking()
-                                               ↓
-                      queue:stream_dlq  ←      [fail / DLQ]
-                                               ↓
-                  FastAPI Storage Server       TaskHistoryStore (同 Redis)
-                  /api/storage/upload         qtask:hist:{queue}:{task_id}
-                  /api/storage/download       qtask:hist_idx:{queue}
+[生产者]                [Redis Stream]                [消费者 Worker]
+SmartQueue.push()  ──→  ns:q_name:stream  ←──  Worker.run()
+                           │                     │ (管理身份 & 消费组)
+                           ▼                     ▼
+                   ns:q_name:stream_dlq  ←──  SmartQueue.fail()
+                                                 │
+                   [FastAPI Storage]       [TaskHistoryStore]
+                   Payload > 50KB 时自动卸载   仅保留 Namespace 相关维度
 ```
 
 ---
@@ -112,9 +111,8 @@ storage = RemoteStorage("http://localhost:8000")
 queue = SmartQueue(
     redis_url="redis://localhost:6379/0",
     queue_name="spider:tasks",
-    namespace="my_project",           # 推荐：加入项目级命名空间
+    namespace="stockev",              # 核心：加入项目级命名空间
     storage=storage,                  # 可选，大载荷卸载
-    large_threshold_bytes=1024 * 50,  # 默认 50KB
 )
 
 # push() 返回 Redis Stream 消息 ID
@@ -143,11 +141,9 @@ from qtask import Worker
 worker = Worker(
     listen_url="redis://localhost:6379/0",
     listen_q_name="spider:tasks",
-    namespace="my_project",                # 必须与生产者一致！
+    namespace="stockev",                   # 必须与生产者一致！
     storage_url="http://localhost:8000",   # 对应 FastAPI 存储服务
-    worker_id="worker-01",                 # 不指定则自动生成带 hostname 的 ID
     auto_claim=True,                       # 自动认领 Zombie 任务
-    claim_interval=300,                    # 认领检查间隔（秒）
 )
 
 @worker.on("scrape_stock")
@@ -238,8 +234,6 @@ qtask history spider:tasks --status failed --days 7
 qtask history spider:tasks --status completed -n 200
 
 # 输出示例：
-# TASK ID                      ACTION               STATUS       RETRIES  DURATION  CREATED
-# ──────────────────────────────────────────────────────────────────────────────────────────
 # 1741940123456-0              scrape_stock         completed          0    0.312s  03-14 10:30:01
 # 1741940111111-0              scrape_stock         failed             2       —    03-14 10:29:55
 ```
@@ -348,15 +342,16 @@ qtask <command> --help
 | 命令 | 说明 |
 |------|------|
 | `qtask index <queue>` | 查看队列长度和 Stream 信息 |
-| `qtask groups <queue>` | 查看 Consumer Group 状态（pending 数等） |
+| `qtask groups <queue>` | 查看消费者组状态（自动推导组名） |
 | `qtask dlq <queue> [--preview]` | 查看死信队列；`--preview` 截取前 5 条 |
 | `qtask requeue <queue> [--task-id ID]` | 将 DLQ 任务回放到主队列 |
-| `qtask claim <queue> [--group G] [--idle-ms N]` | 强制认领超时 Zombie 任务 |
-| `qtask reset <queue> [--group G] [-f]` | 重置消费组游标到最新（丢弃积压） |
-| `qtask clear <queue> [-f]` | **危险**：清空队列及 DLQ 所有数据 |
+| `qtask claim <queue> [--idle-ms N]` | 强制认领超时 Zombie 任务（自动定位组） |
+| `qtask reset <queue> [-f]` | 重置消费组游标到最新（自动定位组） |
+| `qtask clear <queue> [--hard] [-f]` | 清空队列；`--hard` 连历史一起删 |
+| `qtask ns list` | 列出所有已注册的 Namespace 状态汇总 |
+| `qtask ns purge <ns> [-f]` | **危险**：一键清除 Namespace 下所有数据 |
 | `qtask history <queue> [--status S] [--days D] [-n N]` | 查看任务历史记录 |
-| `qtask settings show` | 查看全局设置（history_keep_days 等） |
-| `qtask settings set --keep-days N` | 设置历史记录保留天数 |
+| `qtask settings show / set` | 查看或设置历史保留天数 |
 
 所有命令支持 `--redis-url` 参数（默认 `redis://localhost:6379/0`）：
 

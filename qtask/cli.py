@@ -40,10 +40,6 @@ app = typer.Typer(
 )
 
 
-def get_redis_client(url: str):
-    return redis.from_url(url, decode_responses=True)
-
-
 REDIS_URL_OPT = typer.Option(
     "redis://localhost:6379/0", "--redis-url",
     help="Redis 连接 URL，如 redis://:password@host:6379/0",
@@ -51,15 +47,30 @@ REDIS_URL_OPT = typer.Option(
 )
 
 
+@app.callback()
+def main_callback(
+    ctx: typer.Context,
+    redis_url: str = REDIS_URL_OPT,
+):
+    """
+    初始化全局 Redis 客户端并存储在 context 中。
+    """
+    ctx.obj = get_redis_client(redis_url)
+    ctx.params["redis_url"] = redis_url
+
+
+def get_redis_client(url: str):
+    return redis.from_url(url, decode_responses=True)
+
 # ──────────────────────── 基础队列命令 ────────────────────────
 
 @app.command("index")
 def cmd_index(
+    ctx: typer.Context,
     queue_name: str = typer.Argument(..., help="队列基础名，含 namespace 前缀时如 proj_a:spider:tasks", metavar="QUEUE"),
-    redis_url: str = REDIS_URL_OPT,
 ):
     """查看队列基本信息（长度、最新条目 ID）。"""
-    r = get_redis_client(redis_url)
+    r = ctx.obj
     q_name = f"{queue_name}:stream"
     try:
         length = r.xlen(q_name)
@@ -76,14 +87,14 @@ def cmd_index(
 
 @app.command("groups")
 def cmd_groups(
+    ctx: typer.Context,
     queue_name: str = typer.Argument(..., help="队列基础名", metavar="QUEUE"),
-    redis_url: str = REDIS_URL_OPT,
 ):
     """查看队列的所有 Consumer Group（消费者数、Pending 数）。
 
     Pending 过多代表 Worker 挂死，可用 'qtask claim' 认领僵尸消息。
     """
-    r = get_redis_client(redis_url)
+    r = ctx.obj
     q_name = f"{queue_name}:stream"
     try:
         groups = r.xinfo_groups(q_name)
@@ -98,15 +109,15 @@ def cmd_groups(
 
 @app.command("dlq")
 def cmd_dlq(
+    ctx: typer.Context,
     queue_name: str = typer.Argument(..., help="队列基础名", metavar="QUEUE"),
     preview: bool = typer.Option(False, "--preview", "-p", help="预览前 5 条失败消息（排查错误原因）"),
-    redis_url: str = REDIS_URL_OPT,
 ):
     """查看死信队列（DLQ）——所有处理失败的消息都在这里。
 
     DLQ 中的消息不会自动重试，需用 'qtask requeue' 手动重放。
     """
-    r = get_redis_client(redis_url)
+    r = ctx.obj
     dlq_name = f"{queue_name}:stream_dlq"
     try:
         length = r.xlen(dlq_name)
@@ -122,15 +133,15 @@ def cmd_dlq(
 
 @app.command("requeue")
 def cmd_requeue(
+    ctx: typer.Context,
     queue_name: str = typer.Argument(..., help="队列基础名", metavar="QUEUE"),
     task_id: str = typer.Option(None, "--task-id", "-t", help="指定单条 Stream 消息 ID；省略则重放 DLQ 全部消息"),
-    redis_url: str = REDIS_URL_OPT,
 ):
     """将 DLQ 中的失败任务重放回主队列（重试）。
 
     流程: 排查失败原因 -> 修复代码/数据 -> qtask requeue -> Worker 重新处理。
     """
-    r = get_redis_client(redis_url)
+    r = ctx.obj
     q_name = f"{queue_name}:stream"
     dlq_name = f"{queue_name}:stream_dlq"
     try:
@@ -151,9 +162,9 @@ def cmd_requeue(
 
 @app.command("claim")
 def cmd_claim(
+    ctx: typer.Context,
     queue_name: str = typer.Argument(..., help="队列基础名，含 namespace 前缀时如 proj_a:spider:tasks", metavar="QUEUE"),
     idle_ms: int = typer.Option(300000, "--idle-ms", help="只认领超过此毫秒数仍未 ACK 的 Pending 消息（默认 5 分钟）"),
-    redis_url: str = REDIS_URL_OPT,
 ):
     """强制认领僵尸 Pending 消息（Worker 宕机后使用）。
 
@@ -162,15 +173,18 @@ def cmd_claim(
     from qtask.queue import SmartQueue
     ns = queue_name.split(":", 1)[0] if ":" in queue_name else ""
     q_base = queue_name.split(":", 1)[1] if ":" in queue_name else queue_name
+    derived_group = f"{ns}_group" if ns else "default_group"
+    
+    redis_url = ctx.parent.params["redis_url"]
     q = SmartQueue(redis_url, q_base, namespace=ns)
-    count = q.claim_all(idle_time_ms=idle_ms)
-    typer.echo(f"Claimed {count} zombie message(s).")
+    count = q.claim_all(worker_group=derived_group, worker_id="cli-manual", idle_time_ms=idle_ms)
+    typer.echo(f"Claimed {count} zombie message(s) for group '{derived_group}'.")
 
 
 @app.command("reset")
 def cmd_reset(
+    ctx: typer.Context,
     queue_name: str = typer.Argument(..., help="队列基础名，含 namespace 前缀时如 proj_a:spider:tasks", metavar="QUEUE"),
-    redis_url: str = REDIS_URL_OPT,
     force: bool = typer.Option(False, "--force", "-f", help="跳过确认"),
 ):
     """[危险] 重置消费组游标到最新位置（$），忽略所有积压消息。
@@ -184,8 +198,9 @@ def cmd_reset(
     if not force:
         typer.confirm(f"Reset group '{derived_group}' on '{queue_name}'? Backlogged messages will be SKIPPED.", abort=True)
     from qtask.queue import SmartQueue
+    redis_url = ctx.parent.params["redis_url"]
     q = SmartQueue(redis_url, q_base, namespace=ns)
-    if q.reset_group():
+    if q.reset_group(derived_group):
         typer.echo(f"Group '{derived_group}' cursor reset to latest ($).")
     else:
         typer.echo("Failed.")
@@ -193,8 +208,8 @@ def cmd_reset(
 
 @app.command("clear")
 def cmd_clear(
+    ctx: typer.Context,
     queue_name: str = typer.Argument(..., help="队列基础名，含 namespace 前缀时如 proj_a:spider:tasks", metavar="QUEUE"),
-    redis_url: str = REDIS_URL_OPT,
     force: bool = typer.Option(False, "--force", "-f", help="跳过确认"),
     hard: bool = typer.Option(False, "--hard", help="同时清除所有历史记录（Hash + SortedSet），彻底重置"),
 ):
@@ -210,9 +225,12 @@ def cmd_clear(
     from qtask.queue import SmartQueue
     ns = queue_name.split(":", 1)[0] if ":" in queue_name else ""
     q_base = queue_name.split(":", 1)[1] if ":" in queue_name else queue_name
+    derived_group = f"{ns}_group" if ns else "default_group"
+    
+    redis_url = ctx.parent.params["redis_url"]
     q = SmartQueue(redis_url, q_base, namespace=ns)
-    if q.clear_all(clear_history=hard):
-        typer.echo(f"Queue '{queue_name}' cleared." + (" (history wiped)" if hard else ""))
+    if q.clear_all(worker_group=derived_group, clear_history=hard):
+        typer.echo(f"Queue '{queue_name}' cleared (group '{derived_group}' reset)." + (" (history wiped)" if hard else ""))
     else:
         typer.echo("Failed.")
 
@@ -239,9 +257,9 @@ app.add_typer(ns_app, name="ns")
 
 
 @ns_app.command("list")
-def cmd_ns_list(redis_url: str = REDIS_URL_OPT):
+def cmd_ns_list(ctx: typer.Context):
     """列出所有已注册的 namespace 及队列数和历史统计。"""
-    r = get_redis_client(redis_url)
+    r = ctx.obj
     from qtask.queue import _NS_SET_KEY, _NS_QUEUES_KEY
     from qtask.history import TaskHistoryStore
     namespaces = sorted(r.smembers(_NS_SET_KEY))
@@ -265,11 +283,11 @@ def cmd_ns_list(redis_url: str = REDIS_URL_OPT):
 
 @ns_app.command("info")
 def cmd_ns_info(
+    ctx: typer.Context,
     namespace: str = typer.Argument(..., help="Namespace 名称"),
-    redis_url: str = REDIS_URL_OPT,
 ):
     """查看 namespace 下各队列的详细信息（Stream 长度、DLQ 数、历史统计）。"""
-    r = get_redis_client(redis_url)
+    r = ctx.obj
     from qtask.queue import _NS_QUEUES_KEY
     from qtask.history import TaskHistoryStore
     queues = sorted(r.smembers(_NS_QUEUES_KEY.format(ns=namespace)))
@@ -293,8 +311,8 @@ def cmd_ns_info(
 
 @ns_app.command("purge")
 def cmd_ns_purge(
+    ctx: typer.Context,
     namespace: str = typer.Argument(..., help="要彻底清除的 Namespace 名称"),
-    redis_url: str = REDIS_URL_OPT,
     force: bool = typer.Option(False, "--force", "-f", help="跳过确认（脚本/批量使用）"),
 ):
     """[危险] 彻底清除 namespace 下的所有 Redis 数据（不可逆）。
@@ -303,7 +321,7 @@ def cmd_ns_purge(
     """
     if not force:
         typer.confirm(f"DANGER: Permanently delete ALL data in namespace '{namespace}'? (irreversible)", abort=True)
-    r = get_redis_client(redis_url)
+    r = ctx.obj
     from qtask.queue import SmartQueue
     deleted = SmartQueue.purge_namespace(r, namespace)
     typer.echo(f"Namespace '{namespace}' purged: stream_keys={deleted['stream_keys']} history_keys={deleted['history_keys']} meta_keys={deleted['meta_keys']}")
@@ -313,18 +331,18 @@ def cmd_ns_purge(
 
 @app.command("history")
 def cmd_history(
+    ctx: typer.Context,
     queue_name: str = typer.Argument(..., help="队列基础名（如 proj_a:spider:tasks）", metavar="QUEUE"),
     status: str = typer.Option("all", "--status", "-s", help="状态过滤: all | pending | completed | failed"),
     days: int = typer.Option(None, "--days", "-d", help="只查最近 N 天（默认使用全局 keep_days 设置）"),
     limit: int = typer.Option(50, "--limit", "-n", help="最多显示条数（默认 50）"),
-    redis_url: str = REDIS_URL_OPT,
 ):
     """查看任务历史记录（状态、重试次数、耗时、失败原因）。
 
     历史由 Worker 自动记录，按 keep_days 设置懒清理过期数据。
     修改保留天数: qtask settings set --keep-days 30
     """
-    r = get_redis_client(redis_url)
+    r = ctx.obj
     base_name = queue_name.replace(":stream", "")
     try:
         from qtask.history import TaskHistoryStore
@@ -373,9 +391,9 @@ app.add_typer(settings_app, name="settings")
 
 
 @settings_app.command("show")
-def cmd_settings_show(redis_url: str = REDIS_URL_OPT):
+def cmd_settings_show(ctx: typer.Context):
     """显示当前全局设置。"""
-    r = get_redis_client(redis_url)
+    r = ctx.obj
     from qtask.history import DEFAULT_KEEP_DAYS, SETTINGS_KEY
     raw = r.hgetall(SETTINGS_KEY)
     keep_days = int(raw.get("history_keep_days", DEFAULT_KEEP_DAYS))
@@ -384,14 +402,14 @@ def cmd_settings_show(redis_url: str = REDIS_URL_OPT):
 
 @settings_app.command("set")
 def cmd_settings_set(
+    ctx: typer.Context,
     keep_days: int = typer.Option(..., "--keep-days", "-k", help="历史记录保留天数（1-365）"),
-    redis_url: str = REDIS_URL_OPT,
 ):
     """设置历史任务保留天数（同 Dashboard -> Settings 面板）。"""
     if keep_days < 1 or keep_days > 365:
         typer.echo("Error: keep_days must be between 1 and 365")
         raise typer.Exit(1)
-    r = get_redis_client(redis_url)
+    r = ctx.obj
     from qtask.history import TaskHistoryStore
     TaskHistoryStore.set_keep_days(r, keep_days)
     typer.echo(f"history_keep_days set to {keep_days} days.")

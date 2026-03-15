@@ -216,9 +216,18 @@ def clear_queue(queue_name: str, req: QueueAdminRequest):
     """危险：彻底清空某个队列及其死信"""
     if req.password != ADMIN_PASSWORD:
         raise HTTPException(status_code=403, detail="Invalid admin password provided for decisive action.")
-    from qtask.queue import SmartQueue
-    q = SmartQueue(REDIS_URL, queue_name.replace(":stream", ""))
-    if q.clear_all(clear_history=True):
+    from qtask.queue import SmartQueue, _NS_SET_KEY
+    r = get_redis_client()
+    try:
+        known_ns = r.smembers(_NS_SET_KEY)
+    except:
+        known_ns = set()
+    ns = _detect_namespace(queue_name, known_ns)
+    q_base = queue_name.split(":", 1)[1] if ns and ":" in queue_name else queue_name.replace(":stream", "")
+    wg = f"{ns}_group" if ns else "default_group"
+
+    q = SmartQueue(REDIS_URL, q_base, namespace=ns)
+    if q.clear_all(worker_group=wg, clear_history=True):
         return {"status": "success", "message": f"Queue {queue_name} and its history have been cleared"}
     raise HTTPException(status_code=500, detail="Failed to clear queue")
 
@@ -240,9 +249,10 @@ def reset_group(queue_name: str, req: QueueAdminRequest):
     ns = _detect_namespace(queue_name, known_ns)
     q_base = queue_name.split(":", 1)[1] if ns and ":" in queue_name else queue_name
     
+    wg = f"{ns}_group" if ns else "default_group"
     q = SmartQueue(REDIS_URL, q_base, namespace=ns)
-    if q.reset_group():
-        return {"status": "success", "message": f"Cursor for group {q.worker_group} reset"}
+    if q.reset_group(wg):
+        return {"status": "success", "message": f"Cursor for {queue_name} has been reset to latest."}
     raise HTTPException(status_code=500, detail="Failed to reset group cursor")
 
 

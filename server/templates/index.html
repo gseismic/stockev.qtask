@@ -301,14 +301,14 @@
                                 </div>
                             </div>
                             <div class="flex justify-between items-center bg-slate-50 p-3 rounded-lg border border-slate-100 text-sm">
-                                <div>
-                                    <span class="text-slate-500">Groups: </span>
-                                    <span class="font-bold text-slate-700">{{ info.groups?.length||0 }}</span>
-                                    <div class="flex flex-wrap gap-1 mt-1">
-                                        <span v-for="g in info.groups" class="px-2 py-0.5 bg-white border border-slate-200 rounded text-xs text-slate-600">
-                                            {{ g.name }} ({{g.pending}})
-                                        </span>
-                                    </div>
+                                <div class="flex items-center gap-2">
+                                    <span class="text-slate-500">Status:</span>
+                                    <span v-if="info.pending_ack > 0" class="flex items-center gap-1 text-amber-600 font-medium">
+                                        <i data-lucide="clock" class="w-3.5 h-3.5"></i> Processing
+                                    </span>
+                                    <span v-else class="flex items-center gap-1 text-emerald-600 font-medium">
+                                        <i data-lucide="check" class="w-3.5 h-3.5"></i> Idle
+                                    </span>
                                 </div>
                                 <div v-if="info.dlq_length>0" class="text-right">
                                     <div class="text-xs text-red-500 font-bold uppercase">Dead Letters</div>

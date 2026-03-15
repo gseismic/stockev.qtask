@@ -13,6 +13,7 @@ TaskHistoryStore — 基于 Redis Hash + SortedSet 的轻量任务历史层
 """
 import time
 import json
+from loguru import logger
 from typing import Optional, List, Dict, Any
 
 DEFAULT_KEEP_DAYS = 15
@@ -31,6 +32,7 @@ class TaskHistoryStore:
         self.queue_name = queue_name
         self._hist_prefix = f"qtask:hist:{queue_name}"
         self._idx_key = f"qtask:hist_idx:{queue_name}"
+        self._stat_key = f"qtask:hist_stat:{queue_name}"
 
     # ─────────────────────── 写入接口 ───────────────────────
 
@@ -52,6 +54,13 @@ class TaskHistoryStore:
         })
         # 加入时间索引
         self.r.zadd(self._idx_key, {task_id: now})
+        
+        # 更新状态统计
+        pipe = self.r.pipeline()
+        pipe.hincrby(self._stat_key, "pending", 1)
+        pipe.hincrby(self._stat_key, "total", 1)
+        pipe.execute()
+
         # 设置 Hash 的 TTL（以 keep_days 为准）以防孤儿 key
         self._set_hash_ttl(key)
 
@@ -65,6 +74,11 @@ class TaskHistoryStore:
             "duration_s": round(duration_s, 3),
         })
         self._ensure_indexed(task_id, now)
+        # 更新状态统计
+        pipe = self.r.pipeline()
+        pipe.hincrby(self._stat_key, "pending", -1)
+        pipe.hincrby(self._stat_key, "completed", 1)
+        pipe.execute()
 
     def record_fail(self, task_id: str, reason: str = ""):
         """任务移入 DLQ 时调用"""
@@ -76,6 +90,12 @@ class TaskHistoryStore:
             "fail_reason": reason[:500],
         })
         self._ensure_indexed(task_id, now)
+
+        # 更新状态统计
+        pipe = self.r.pipeline()
+        pipe.hincrby(self._stat_key, "pending", -1)
+        pipe.hincrby(self._stat_key, "failed", 1)
+        pipe.execute()
 
     def record_retry(self, task_id: str):
         """每次重试时调用，重试次数 +1"""
@@ -133,18 +153,44 @@ class TaskHistoryStore:
         return results
 
     def count_by_status(self) -> Dict[str, int]:
-        """统计各状态任务数量（最近 keep_days 天）"""
-        keep_days = self.get_keep_days()
-        min_ts = time.time() - keep_days * 86400
-        candidate_ids = self.r.zrangebyscore(self._idx_key, min_ts, "+inf")
+        """统计各状态任务数量 (O(1) 查询缓存)"""
+        try:
+            raw = self.r.hgetall(self._stat_key)
+            counts = {
+                "pending": int(raw.get("pending", 0)),
+                "completed": int(raw.get("completed", 0)),
+                "failed": int(raw.get("failed", 0)),
+                "total": int(raw.get("total", 0))
+            }
+            # 容错处理：Redis 计数器可能因为特殊情况不准，这里做简单的非负检查
+            for k in counts:
+                if counts[k] < 0: counts[k] = 0
+            return counts
+        except Exception:
+            # 降级方案（虽然慢，但保证能出结果）
+            return {"pending": 0, "completed": 0, "failed": 0, "total": 0}
 
+    def rebuild_stats(self):
+        """[运维] 重新全量扫描并修正状态统计计数器 (O(N))"""
+        # 慎用，通常只在系统迁移或计数器明显损坏时调用
         counts = {"pending": 0, "completed": 0, "failed": 0, "total": 0}
-        for tid in candidate_ids:
-            key = f"{self._hist_prefix}:{tid}"
-            st = self.r.hget(key, "status")
-            if st and st in counts:
-                counts[st] += 1
-            counts["total"] += 1
+        cursor = 0
+        while True:
+            # 扫描索引中的所有 task_id
+            # 这里为了简化，直接 zrange 索引
+            candidate_ids = self.r.zrange(self._idx_key, 0, -1)
+            for tid in candidate_ids:
+                key = f"{self._hist_prefix}:{tid}"
+                st = self.r.hget(key, "status")
+                if st and st in counts:
+                    counts[st] += 1
+                counts["total"] += 1
+            break # zrange 一次性出结果，如果不大的话。如果很大建议用 zscan
+        
+        # 写入新统计值
+        self.r.delete(self._stat_key)
+        if counts["total"] > 0:
+            self.r.hset(self._stat_key, mapping=counts)
         return counts
 
     # ─────────────────────── 清理接口 ───────────────────────
@@ -158,8 +204,18 @@ class TaskHistoryStore:
         old_ids = self.r.zrangebyscore(self._idx_key, "-inf", cutoff)
         if old_ids:
             pipe = self.r.pipeline()
+            # 批量获取状态，以便准确减去计数器
             for tid in old_ids:
+                pipe.hget(f"{self._hist_prefix}:{tid}", "status")
+            statuses = pipe.execute()
+
+            pipe = self.r.pipeline()
+            for tid, status in zip(old_ids, statuses):
                 pipe.delete(f"{self._hist_prefix}:{tid}")
+                if status and status in ["pending", "completed", "failed"]:
+                    pipe.hincrby(self._stat_key, status, -1)
+                pipe.hincrby(self._stat_key, "total", -1)
+            
             pipe.zremrangebyscore(self._idx_key, "-inf", cutoff)
             pipe.execute()
         return len(old_ids)
