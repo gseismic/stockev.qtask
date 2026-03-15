@@ -62,6 +62,21 @@ def main_callback(
 def get_redis_client(url: str):
     return redis.from_url(url, decode_responses=True)
 
+
+def parse_queue_name(queue_name: str) -> tuple[str, str, str]:
+    """解析 queue_name，返回 (namespace, base_name, worker_group)
+    
+    例如:
+        "spider:tasks" -> ("", "spider:tasks", "default_group")
+        "proj_a:spider:tasks" -> ("proj_a", "spider:tasks", "proj_a_group")
+    """
+    if ":" in queue_name:
+        ns, base = queue_name.split(":", 1)
+    else:
+        ns, base = "", queue_name
+    worker_group = f"{ns}_group" if ns else "default_group"
+    return ns, base, worker_group
+
 # ──────────────────────── 基础队列命令 ────────────────────────
 
 @app.command("index")
@@ -150,10 +165,19 @@ def cmd_requeue(
             typer.echo("DLQ is empty or task not found.")
             return
         pipe = r.pipeline()
+        import json as json_lib
         for msg_id, payload in msgs:
-            if payload.get("payload"):
-                pipe.xadd(q_name, {"payload": payload["payload"]})
-                pipe.xdel(dlq_name, msg_id)
+            raw_val = payload.get("payload")
+            if raw_val:
+                try:
+                    # DLQ 里的内容是 JSON 字符串，包含 {payload: "...", reason: "..."}
+                    dlq_data = json_lib.loads(raw_val)
+                    original_payload = dlq_data.get("payload")
+                    if original_payload:
+                        pipe.xadd(q_name, {"payload": original_payload})
+                        pipe.xdel(dlq_name, msg_id)
+                except Exception as e:
+                    typer.echo(f"Warning: Failed to parse DLQ message {msg_id}: {e}")
         pipe.execute()
         typer.echo(f"Re-queued {len(msgs)} message(s) -> {q_name}")
     except redis.exceptions.ResponseError as e:
@@ -171,9 +195,7 @@ def cmd_claim(
     Worker 启动时若设置 auto_claim=True，此操作会自动执行。
     """
     from qtask.queue import SmartQueue
-    ns = queue_name.split(":", 1)[0] if ":" in queue_name else ""
-    q_base = queue_name.split(":", 1)[1] if ":" in queue_name else queue_name
-    derived_group = f"{ns}_group" if ns else "default_group"
+    ns, q_base, derived_group = parse_queue_name(queue_name)
     
     redis_url = ctx.parent.params["redis_url"]
     q = SmartQueue(redis_url, q_base, namespace=ns)
@@ -191,9 +213,7 @@ def cmd_reset(
 
     执行后积压消息会被 Worker 跳过，适用于积压数据已无效、需要从现在开始处理的场景。
     """
-    ns = queue_name.split(":", 1)[0] if ":" in queue_name else ""
-    q_base = queue_name.split(":", 1)[1] if ":" in queue_name else queue_name
-    derived_group = f"{ns}_group" if ns else "default_group"
+    ns, q_base, derived_group = parse_queue_name(queue_name)
 
     if not force:
         typer.confirm(f"Reset group '{derived_group}' on '{queue_name}'? Backlogged messages will be SKIPPED.", abort=True)
@@ -223,9 +243,7 @@ def cmd_clear(
     if not force:
         typer.confirm(f"DANGER: Clear [{mode}] for '{queue_name}'?", abort=True)
     from qtask.queue import SmartQueue
-    ns = queue_name.split(":", 1)[0] if ":" in queue_name else ""
-    q_base = queue_name.split(":", 1)[1] if ":" in queue_name else queue_name
-    derived_group = f"{ns}_group" if ns else "default_group"
+    ns, q_base, derived_group = parse_queue_name(queue_name)
     
     redis_url = ctx.parent.params["redis_url"]
     q = SmartQueue(redis_url, q_base, namespace=ns)

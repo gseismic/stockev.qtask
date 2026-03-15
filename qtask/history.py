@@ -23,6 +23,8 @@ SETTINGS_KEY = "qtask:settings"
 class TaskHistoryStore:
     """轻量级任务历史记录，依托 Redis，不引入额外数据库"""
 
+    _decr_script = None
+
     def __init__(self, redis_client, queue_name: str):
         """
         :param redis_client: 已初始化的 redis 客户端（decode_responses=True）
@@ -33,6 +35,12 @@ class TaskHistoryStore:
         self._hist_prefix = f"qtask:hist:{queue_name}"
         self._idx_key = f"qtask:hist_idx:{queue_name}"
         self._stat_key = f"qtask:hist_stat:{queue_name}"
+
+    def _get_decr_script(self):
+        """获取或注册 Lua 递减脚本"""
+        if TaskHistoryStore._decr_script is None:
+            TaskHistoryStore._decr_script = self.r.register_script(self._LUA_DECR_ZERO_FLOOR)
+        return TaskHistoryStore._decr_script
 
     # ─────────────────────── 写入接口 ───────────────────────
 
@@ -172,53 +180,99 @@ class TaskHistoryStore:
 
     def rebuild_stats(self):
         """[运维] 重新全量扫描并修正状态统计计数器 (O(N))"""
-        # 慎用，通常只在系统迁移或计数器明显损坏时调用
         counts = {"pending": 0, "completed": 0, "failed": 0, "total": 0}
         cursor = 0
+        batch_size = 1000
+        
         while True:
-            # 扫描索引中的所有 task_id
-            # 这里为了简化，直接 zrange 索引
-            candidate_ids = self.r.zrange(self._idx_key, 0, -1)
-            for tid in candidate_ids:
-                key = f"{self._hist_prefix}:{tid}"
-                st = self.r.hget(key, "status")
+            cursor, items = self.r.zscan(self._idx_key, cursor, count=batch_size)
+            if not items:
+                break
+                
+            tid_list = list(items.keys())
+            
+            pipe = self.r.pipeline()
+            for tid in tid_list:
+                pipe.hget(f"{self._hist_prefix}:{tid}", "status")
+            statuses = pipe.execute()
+            
+            for st in statuses:
                 if st and st in counts:
                     counts[st] += 1
                 counts["total"] += 1
-            break # zrange 一次性出结果，如果不大的话。如果很大建议用 zscan
+            
+            if cursor == 0:
+                break
         
-        # 写入新统计值
         self.r.delete(self._stat_key)
         if counts["total"] > 0:
             self.r.hset(self._stat_key, mapping=counts)
         return counts
 
     # ─────────────────────── 清理接口 ───────────────────────
+    
+    _LUA_DECR_ZERO_FLOOR = """
+    local current = redis.call('HGET', KEYS[1], ARGV[1])
+    if current and tonumber(current) > 0 then
+        return redis.call('HINCRBY', KEYS[1], ARGV[1], -1)
+    else
+        return 0
+    end
+    """
 
     def cleanup_old(self, keep_days: Optional[int] = None):
-        """删除超过 keep_days 天的历史记录（在写操作时懒触发）"""
+        """删除超过 keep_days 天的历史记录（分批进行，防止阻塞 Redis）"""
         if keep_days is None:
             keep_days = self.get_keep_days()
         cutoff = time.time() - keep_days * 86400
-        # 移除索引中过期的 task_id
-        old_ids = self.r.zrangebyscore(self._idx_key, "-inf", cutoff)
-        if old_ids:
+        
+        total_deleted = 0
+        batch_size = 1000
+        
+        while True:
+            # 1. 分批取出过期的 task_id
+            old_ids = self.r.zrangebyscore(self._idx_key, "-inf", cutoff, start=0, num=batch_size)
+            if not old_ids:
+                break
+            
+            # 2. 批量获取状态
             pipe = self.r.pipeline()
-            # 批量获取状态，以便准确减去计数器
             for tid in old_ids:
                 pipe.hget(f"{self._hist_prefix}:{tid}", "status")
             statuses = pipe.execute()
 
-            pipe = self.r.pipeline()
-            for tid, status in zip(old_ids, statuses):
-                pipe.delete(f"{self._hist_prefix}:{tid}")
+            # 3. 构造 Lua 脚本执行（带 0 兜底的递减）
+            # 注意：大量执行 Lua 脚本可能也有开销，这里可以用 pipeline 优化
+            status_counts_to_decr = []
+            for status in statuses:
                 if status and status in ["pending", "completed", "failed"]:
-                    pipe.hincrby(self._stat_key, status, -1)
-                pipe.hincrby(self._stat_key, "total", -1)
+                    status_counts_to_decr.append(status)
             
-            pipe.zremrangebyscore(self._idx_key, "-inf", cutoff)
+            # 4. 批量删除 Hash 和索引，并安全递减计数器
+            pipe = self.r.pipeline()
+            for tid in old_ids:
+                pipe.delete(f"{self._hist_prefix}:{tid}")
+            
+            # 计数器递减（使用 Lua 确保不低于 0）
+            decr_script = self._get_decr_script()
+            for status in status_counts_to_decr:
+                decr_script(keys=[self._stat_key], args=[status])
+            
+            # total 也需要安全递减
+            for _ in range(len(old_ids)):
+                decr_script(keys=[self._stat_key], args=["total"])
+
+            pipe.zremrangebyrank(self._idx_key, 0, len(old_ids) - 1)
             pipe.execute()
-        return len(old_ids)
+            
+            total_deleted += len(old_ids)
+            # 如果这一批不满 batch_size，说明处理完了
+            if len(old_ids) < batch_size:
+                break
+                
+        if total_deleted > 0:
+            logger.debug(f"History cleanup: deleted {total_deleted} old records.")
+        return total_deleted
 
     # ─────────────────────── 设置接口 ───────────────────────
 

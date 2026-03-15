@@ -1,5 +1,7 @@
 import io
 import requests
+from requests.exceptions import Timeout, RequestException
+from loguru import logger
 from typing import Optional, Union
 
 class RemoteStorage:
@@ -17,25 +19,41 @@ class RemoteStorage:
         self.session.mount('http://', adapter)
         self.session.mount('https://', adapter)
         
-    def save(self, data_str: str) -> str:
+    def save(self, data_str: str, unique_key: str = None) -> str:
         """上传大字符串，返回唯一 Key"""
-        return self.save_bytes(data_str.encode('utf-8'))
+        return self.save_bytes(data_str.encode('utf-8'), unique_key=unique_key)
         
-    def save_bytes(self, data_bytes: bytes) -> str:
+    def save_bytes(self, data_bytes: bytes, unique_key: str = None) -> str:
         """上传二进制数据。Requests 内部支持直接发送 bytes，减少不必要的内存复制。"""
         url = f"{self.api_base_url}/api/storage/upload"
-        # 直接传入 bytes 作为文件内容，不需要 io.BytesIO 包装
         files = {'file': ('data.json', data_bytes, 'application/json')}
         
-        response = self.session.post(url, files=files, timeout=(3, 30))
-        response.raise_for_status()
+        if unique_key:
+            files['file'] = (unique_key, data_bytes, 'application/json')
+        
+        try:
+            response = self.session.post(url, files=files, timeout=(3, 30))
+            response.raise_for_status()
+        except Timeout:
+            logger.error(f"Storage upload timeout: {url}")
+            raise
+        except RequestException as e:
+            logger.error(f"Storage upload failed: {e}")
+            raise
         return response.json()["key"]
         
     def load(self, key: str) -> str:
         """下载并读取内容"""
         url = f"{self.api_base_url}/api/storage/download/{key}"
-        response = self.session.get(url, timeout=(3, 30))
-        response.raise_for_status()
+        try:
+            response = self.session.get(url, timeout=(3, 30))
+            response.raise_for_status()
+        except Timeout:
+            logger.error(f"Storage download timeout: {url}")
+            raise
+        except RequestException as e:
+            logger.error(f"Storage download failed: {e}")
+            raise
         return response.content.decode('utf-8')
             
     def delete(self, key: str) -> bool:

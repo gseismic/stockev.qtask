@@ -105,7 +105,7 @@ class Worker:
                 action = payload.get("action", "unknown_action")
                 msg_id = msg_context.get("msg_id") if msg_context else "unknown_id"
 
-                logger.info(f"[{msg_id}] Received Task -> Action: {action}")
+                logger.debug(f"[{msg_id}] Received Task -> Action: {action}")
                 handler = self.handlers.get(action)
 
                 if not handler:
@@ -120,20 +120,33 @@ class Worker:
 
                 if result_payload and self.result_q:
                     self.result_q.push(result_payload)
-                    logger.info(f"[{msg_id}] Task completed in {t_cost:.3f}s. Result pushed to {self.result_q.queue_name}.")
+                    logger.debug(f"[{msg_id}] Task completed in {t_cost:.3f}s. Result pushed to {self.result_q.queue_name}.")
                 else:
-                    logger.info(f"[{msg_id}] Task completed in {t_cost:.3f}s. (No return payload)")
+                    logger.debug(f"[{msg_id}] Task completed in {t_cost:.3f}s. (No return payload)")
 
                 self.listen_q.ack(msg_context)
 
+            except redis_lib.exceptions.ConnectionError as e:
+                if not self.running:
+                    logger.info(f"Worker stopping due to signal, connection closed: {e}")
+                    break
+                logger.error(f"Redis connection error: {e}\n{traceback.format_exc()}")
+                if msg_context:
+                    self.listen_q.fail(msg_context, reason=f"Connection error: {e}")
+            except redis_lib.exceptions.TimeoutError as e:
+                if not self.running:
+                    logger.info(f"Worker stopping due to signal: {e}")
+                    break
+                logger.error(f"Redis timeout: {e}\n{traceback.format_exc()}")
+                if msg_context:
+                    self.listen_q.fail(msg_context, reason=f"Timeout: {e}")
             except Exception as e:
-                # 如果是运行中异常，记录日志并 fail
                 if self.running:
                     logger.error(f"Task Failed: {e}\n{traceback.format_exc()}")
                     if msg_context:
                         self.listen_q.fail(msg_context, reason=str(e))
                 else:
-                    # 如果是因为收到信号导致的异常（如阻塞被中断），直接退出
+                    logger.info(f"Worker [{self.worker_id}] stopping due to signal.")
                     break
         
         logger.info(f"Worker [{self.worker_id}] stopped cleanly.")

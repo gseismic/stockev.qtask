@@ -59,6 +59,8 @@ class SmartQueue:
         self.claim_interval = claim_interval
         self._last_claim_check = 0
         self._cleanup_counter = 0
+        self._last_cleanup = 0
+        self._cleanup_interval = 60  # 每60秒清理一次
 
         if history:
             self.history = history
@@ -94,14 +96,15 @@ class SmartQueue:
                 raise
 
     def push(self, payload: Dict[str, Any]) -> str:
-        """入队：自动评估体积，拦截大对象，推推入 Stream，返回 msg_id"""
+        """入队：自动评估体积，拦截大对象，推入 Stream，返回 msg_id"""
         payload_json = json.dumps(payload, ensure_ascii=False)
         data_bytes = payload_json.encode('utf-8')
         data_len = len(data_bytes)
 
         if self.storage and data_len > self.large_threshold_bytes:
-            storage_key = self.storage.save_bytes(data_bytes)
-            logger.info(f"Intercepted large payload ({data_len / 1024:.2f} KB). Offloaded to storage key: {storage_key}.")
+            unique_key = f"{uuid.uuid4().hex}_{int(time.time() * 1000)}"
+            storage_key = self.storage.save_bytes(data_bytes, unique_key=unique_key)
+            logger.debug(f"Intercepted large payload ({data_len / 1024:.2f} KB). Offloaded to storage key: {storage_key}.")
             msg = json.dumps({"_qtask_large_payload": True, "storage_key": storage_key})
         else:
             msg = payload_json
@@ -114,9 +117,9 @@ class SmartQueue:
                 preview = payload_json[:200]
                 self.history.record_push(msg_id, action, preview)
                 
-                # 降频调用清理逻辑（每 100 次入队执行一次）
-                self._cleanup_counter += 1
-                if self._cleanup_counter % 100 == 0:
+                now = time.time()
+                if now - self._last_cleanup >= self._cleanup_interval:
+                    self._last_cleanup = now
                     self.history.cleanup_old()
             except Exception as e:
                 logger.warning(f"History record_push failed (non-critical): {e}")
@@ -140,8 +143,8 @@ class SmartQueue:
         block_ms = timeout * 1000 if timeout > 0 else 0
         streams = {self.queue_name: ">"}
         
-        # 使用单个 XREADGROUP 调用替代 while True 循环，
-        # 并通过内部消息处理来维持阻塞行为。
+        max_init_retries = 5
+        init_retry_count = 0
         while True:
             try:
                 messages = self.redis.xreadgroup(
@@ -154,75 +157,97 @@ class SmartQueue:
                 raise
 
             if not messages:
-                # 如果是非阻塞模式且没有消息，或者阻塞超时，则返回 None
                 return None, None
 
             msg_id, msg_data = messages[0][1][0]
-            # 过滤内部初始化消息
             if "_qtask_init" in msg_data:
                 self.redis.xack(self.queue_name, worker_group, msg_id)
-                # 如果是阻塞模式，继续循环以等待真实消息
                 if timeout > 0:
+                    init_retry_count += 1
+                    if init_retry_count > max_init_retries:
+                        logger.warning(f"Too many init messages, stopping to avoid infinite loop")
+                        return None, None
                     continue
                 else:
-                    # 如果是非阻塞模式，且只收到 init 消息，则返回 None
                     return None, None
             
             raw_payload = msg_data.get("payload")
             return self._process_raw_msg(msg_id, raw_payload, worker_group=worker_group)
 
     def _claim_pending_msgs(self, worker_group: str, worker_id: str, idle_time_ms: int = 300000) -> Optional[Tuple[str, str]]:
-        """认领僵尸消息。优化：批量扫描并批量认领，提高效率。"""
-        # 虽然 Redis 6.0 没有 XAUTOCLAIM，但我们可以通过脚本或批量 XCLAIM 模拟
-        pending_info = self.redis.xpending_range(
-            self.queue_name, worker_group, min="-", max="+", count=100
-        )
-        if not pending_info:
-            return None
+        """认领僵尸消息。优化：分页扫描，避免大队列下重复扫描头部导致的高 CPU。"""
+        cursor = "-"
+        max_scan = 1000
+        scanned = 0
 
-        for pending in pending_info:
-            if pending['time_since_delivered'] > idle_time_ms:
-                msg_id = pending['message_id']
-                # 认领单条并在此立即返回（Worker 每次只处理一条）
-                # 这种方式最符合 Worker 的消费循环
-                claimed = self.redis.xclaim(
-                    self.queue_name, worker_group, worker_id, idle_time_ms, [msg_id]
-                )
-                if claimed:
-                    if self.history:
-                        try:
-                            self.history.record_retry(msg_id)
-                        except Exception:
-                            pass
-                    return claimed[0][0], claimed[0][1].get("payload")
+        while scanned < max_scan:
+            pending_info = self.redis.xpending_range(
+                self.queue_name, worker_group, min=cursor, max="+", count=100
+            )
+            if not pending_info:
+                break
+            
+            scanned += len(pending_info)
+            for pending in pending_info:
+                # 排除 cursor 本身
+                if pending['message_id'] == cursor and cursor != "-":
+                    continue
+                
+                if pending['time_since_delivered'] > idle_time_ms:
+                    msg_id = pending['message_id']
+                    claimed = self.redis.xclaim(
+                        self.queue_name, worker_group, worker_id, idle_time_ms, [msg_id]
+                    )
+                    if claimed:
+                        if self.history:
+                            try:
+                                self.history.record_retry(msg_id)
+                            except Exception:
+                                pass
+                        return claimed[0][0], claimed[0][1].get("payload")
+                
+                cursor = pending['message_id']
+
+            if len(pending_info) < 100:
+                break
+        
         return None
 
     def claim_all(self, worker_group: str, worker_id: str, idle_time_ms: int = 300000) -> int:
+        """[CLI/运维] 批量认领所有僵尸消息。优化：分页扫描，避免效率低下。"""
         count = 0
+        cursor = "-"
         while True:
             pending_info = self.redis.xpending_range(
-                self.queue_name, worker_group, min="-", max="+", count=100
+                self.queue_name, worker_group, min=cursor, max="+", count=100
             )
             if not pending_info:
                 break
 
-            claimed_ids = [p['message_id'] for p in pending_info if p['time_since_delivered'] > idle_time_ms]
-            if not claimed_ids:
-                break
+            claimable_ids = []
+            new_cursor = cursor
+            for p in pending_info:
+                if p['message_id'] == cursor and cursor != "-":
+                    continue
+                if p['time_since_delivered'] > idle_time_ms:
+                    claimable_ids.append(p['message_id'])
+                new_cursor = p['message_id']
 
-            # 批量认领
-            claimed = self.redis.xclaim(
-                self.queue_name, worker_group, worker_id, idle_time_ms, claimed_ids
-            )
-            if self.history:
-                for c in claimed:
-                    try:
-                        self.history.record_retry(c[0])
-                    except Exception:
-                        pass
-            count += len(claimed)
+            if claimable_ids:
+                claimed = self.redis.xclaim(
+                    self.queue_name, worker_group, worker_id, idle_time_ms, claimable_ids
+                )
+                if self.history:
+                    for c in claimed:
+                        try:
+                            self.history.record_retry(c[0])
+                        except Exception:
+                            pass
+                count += len(claimed)
+            
             if len(pending_info) < 100:
                 break
+            cursor = new_cursor
         return count
 
     def reset_group(self, worker_group: str):
@@ -284,7 +309,7 @@ class SmartQueue:
                 if not self.storage:
                     raise ValueError("检测到大对象，但未配置 Storage")
                 real_data_str = self.storage.load(parsed["storage_key"])
-                logger.info(f"[{msg_id}] Loaded large payload from remote storage.")
+                logger.debug(f"[{msg_id}] Loaded large payload from remote storage.")
                 return json.loads(real_data_str), msg_context
             return parsed, msg_context
         except Exception as e:
